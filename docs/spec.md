@@ -1,6 +1,6 @@
 # Loam — Garden & Flowerbed Management Platform
 
-## Spec Sheet v1.4
+## Spec Sheet v1.5
 
 ---
 
@@ -64,7 +64,7 @@
 | Database | **PostgreSQL 16** | Relational data (plants, schedules, zones). Mature, great JSON support. |
 | ORM | **SQLAlchemy 2.0 + Alembic** | Migrations, async support, well-documented. |
 | Cache | **Redis** | Weather/API response caching, rate-limit buckets, task queues. |
-| Task Queue | **Celery** or **ARQ** (async) | Scheduled jobs: weather polling, notification dispatch, recommendation refresh. |
+| Task Queue | **ARQ** (async) | Scheduled jobs: weather polling, notification dispatch, recommendation refresh. |
 | Auth | **JWT tokens** (via `python-jose`) | Stateless auth. Simple for <10 users. Optional: basic OIDC if you want SSO later. |
 | AI/Recommendations | **Claude API** or local rules engine | For natural language Q&A ("When should I plant tomatoes?"), with fallback to deterministic rules. |
 | Containerization | **Docker + Docker Compose** | One `docker-compose.yml` to spin up API, DB, Redis, worker, and frontend. |
@@ -533,6 +533,12 @@ The J3455 will handle this fine — it's not doing heavy computation, just API s
 - SSL handled by Cloudflare edge
 - `arda.willms.co` (DSM) remains unexposed — internal only
 
+### Repository
+
+**GitHub:** [mattwillms/loambase](https://github.com/mattwillms/loambase)
+
+Claude Code is configured as the primary development assistant.
+
 ### Deployment Flow
 1. Clone repo to Synology (or build images on dev machine, push to local registry)
 2. `docker-compose up -d`
@@ -607,10 +613,13 @@ npx playwright test
 ## 10. Development Phases
 
 ### Phase 1 — Foundation (MVP)
-- [ ] Backend scaffold: FastAPI + Postgres + Docker Compose
-- [ ] Auth (register, login, JWT, admin role)
-- [ ] Garden + Bed CRUD
-- [ ] Plant library (seed from Perenual, basic search)
+- [x] Backend scaffold: FastAPI + Postgres + Redis + Docker Compose (API + worker services)
+- [x] All 14 database models defined (SQLAlchemy ORM)
+- [x] Alembic migrations (initial schema)
+- [x] Auth endpoints: register, login, JWT access/refresh tokens, admin role
+- [x] Gardens CRUD
+- [x] Beds CRUD
+- [ ] Plant library (seed from Perenual, basic search) ← **next**
 - [ ] Planting CRUD with status tracking
 - [ ] Frontend (LoamUI): Dashboard, garden/bed views, plant search
 - [ ] Basic weather integration (Open-Meteo, cached)
