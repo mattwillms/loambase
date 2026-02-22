@@ -1,0 +1,87 @@
+from fastapi import APIRouter, Depends, HTTPException, status
+from sqlalchemy import select
+from sqlalchemy.ext.asyncio import AsyncSession
+
+from app.core.deps import CurrentUser, get_db
+from app.models.garden import Bed, Garden
+from app.schemas.garden import BedCreate, BedRead, BedUpdate, GardenCreate, GardenRead, GardenUpdate
+
+router = APIRouter(prefix="/gardens", tags=["gardens"])
+
+
+# ── Gardens ──────────────────────────────────────────────────────────────────
+
+
+@router.get("", response_model=list[GardenRead])
+async def list_gardens(current_user: CurrentUser, db: AsyncSession = Depends(get_db)):
+    result = await db.execute(select(Garden).where(Garden.user_id == current_user.id))
+    return result.scalars().all()
+
+
+@router.post("", response_model=GardenRead, status_code=status.HTTP_201_CREATED)
+async def create_garden(data: GardenCreate, current_user: CurrentUser, db: AsyncSession = Depends(get_db)):
+    garden = Garden(**data.model_dump(), user_id=current_user.id)
+    db.add(garden)
+    await db.commit()
+    await db.refresh(garden)
+    return garden
+
+
+@router.get("/{garden_id}", response_model=GardenRead)
+async def get_garden(garden_id: int, current_user: CurrentUser, db: AsyncSession = Depends(get_db)):
+    garden = await _get_owned_garden(db, garden_id, current_user.id)
+    return garden
+
+
+@router.patch("/{garden_id}", response_model=GardenRead)
+async def update_garden(
+    garden_id: int, data: GardenUpdate, current_user: CurrentUser, db: AsyncSession = Depends(get_db)
+):
+    garden = await _get_owned_garden(db, garden_id, current_user.id)
+    for field, value in data.model_dump(exclude_unset=True).items():
+        setattr(garden, field, value)
+    await db.commit()
+    await db.refresh(garden)
+    return garden
+
+
+@router.delete("/{garden_id}", status_code=status.HTTP_204_NO_CONTENT)
+async def delete_garden(garden_id: int, current_user: CurrentUser, db: AsyncSession = Depends(get_db)):
+    garden = await _get_owned_garden(db, garden_id, current_user.id)
+    await db.delete(garden)
+    await db.commit()
+
+
+# ── Beds ─────────────────────────────────────────────────────────────────────
+
+
+@router.get("/{garden_id}/beds", response_model=list[BedRead])
+async def list_beds(garden_id: int, current_user: CurrentUser, db: AsyncSession = Depends(get_db)):
+    await _get_owned_garden(db, garden_id, current_user.id)
+    result = await db.execute(select(Bed).where(Bed.garden_id == garden_id))
+    return result.scalars().all()
+
+
+@router.post("/{garden_id}/beds", response_model=BedRead, status_code=status.HTTP_201_CREATED)
+async def create_bed(
+    garden_id: int, data: BedCreate, current_user: CurrentUser, db: AsyncSession = Depends(get_db)
+):
+    await _get_owned_garden(db, garden_id, current_user.id)
+    bed = Bed(**data.model_dump(), garden_id=garden_id)
+    db.add(bed)
+    await db.commit()
+    await db.refresh(bed)
+    return bed
+
+
+# ── Helpers ───────────────────────────────────────────────────────────────────
+
+
+async def _get_owned_garden(db: AsyncSession, garden_id: int, user_id: int) -> Garden:
+    result = await db.execute(
+        select(Garden).where(Garden.id == garden_id, Garden.user_id == user_id)
+    )
+    garden = result.scalar_one_or_none()
+    if not garden:
+        raise HTTPException(status_code=404, detail="Garden not found")
+    return garden
