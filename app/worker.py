@@ -3,10 +3,18 @@ ARQ worker — background task definitions.
 Run with: python -m app.worker
 """
 import logging
+from datetime import datetime, timezone
+
 from arq import cron
 from arq.connections import RedisSettings
+from sqlalchemy import select
 
 from app.core.config import settings
+from app.db.session import AsyncSessionLocal
+from app.models.logs import PipelineRun
+from app.models.user import User
+from app.services.hardiness import get_hardiness_zone
+from app.services.weather import get_weather
 from app.tasks.seed_plants import seed_plants
 
 logger = logging.getLogger(__name__)
@@ -16,17 +24,112 @@ logger = logging.getLogger(__name__)
 
 
 async def sync_weather(ctx: dict) -> None:
-    """Poll Open-Meteo and update WeatherCache. Runs every 3 hours."""
+    """Poll Open-Meteo for all located users and update WeatherCache. Runs every 3 hours."""
     logger.info("sync_weather: starting")
-    # TODO: implement in Phase 2
-    logger.info("sync_weather: complete")
+    started_at = datetime.now(timezone.utc)
+    records = 0
+
+    async with AsyncSessionLocal() as db:
+        pipeline = PipelineRun(
+            pipeline_name="weather_sync",
+            status="running",
+            started_at=started_at,
+        )
+        db.add(pipeline)
+        await db.commit()
+        await db.refresh(pipeline)
+
+        try:
+            result = await db.execute(
+                select(User).where(
+                    User.latitude.isnot(None),
+                    User.longitude.isnot(None),
+                    User.is_active == True,
+                )
+            )
+            users = result.scalars().all()
+
+            for user in users:
+                try:
+                    await get_weather(user.latitude, user.longitude, ctx["redis"], db)
+                    records += 1
+                except Exception as exc:
+                    logger.warning("sync_weather: failed for user %d: %s", user.id, exc)
+
+            finished_at = datetime.now(timezone.utc)
+            pipeline.status = "success"
+            pipeline.finished_at = finished_at
+            pipeline.duration_ms = int((finished_at - started_at).total_seconds() * 1000)
+            pipeline.records_processed = records
+            await db.commit()
+
+        except Exception as exc:
+            logger.exception("sync_weather: unexpected error")
+            finished_at = datetime.now(timezone.utc)
+            pipeline.status = "failed"
+            pipeline.finished_at = finished_at
+            pipeline.duration_ms = int((finished_at - started_at).total_seconds() * 1000)
+            pipeline.error_message = str(exc)
+            await db.commit()
+            raise
+
+    logger.info("sync_weather: complete — %d locations updated", records)
 
 
 async def refresh_hardiness_zones(ctx: dict) -> None:
-    """Back-fill hardiness zones for users missing them. Runs daily."""
+    """Back-fill hardiness zones for active users with a zip code but no zone set. Runs daily at 02:30."""
     logger.info("refresh_hardiness_zones: starting")
-    # TODO: implement in Phase 1 plant setup
-    logger.info("refresh_hardiness_zones: complete")
+    started_at = datetime.now(timezone.utc)
+    records = 0
+
+    async with AsyncSessionLocal() as db:
+        pipeline = PipelineRun(
+            pipeline_name="zone_lookup",
+            status="running",
+            started_at=started_at,
+        )
+        db.add(pipeline)
+        await db.commit()
+        await db.refresh(pipeline)
+
+        try:
+            result = await db.execute(
+                select(User).where(
+                    User.zip_code.isnot(None),
+                    User.hardiness_zone.is_(None),
+                    User.is_active == True,
+                )
+            )
+            users = result.scalars().all()
+
+            for user in users:
+                try:
+                    data = await get_hardiness_zone(user.zip_code, ctx["redis"])
+                    user.hardiness_zone = data["zone"]
+                    records += 1
+                except Exception as exc:
+                    logger.warning("refresh_hardiness_zones: failed for user %d: %s", user.id, exc)
+
+            await db.commit()
+
+            finished_at = datetime.now(timezone.utc)
+            pipeline.status = "success"
+            pipeline.finished_at = finished_at
+            pipeline.duration_ms = int((finished_at - started_at).total_seconds() * 1000)
+            pipeline.records_processed = records
+            await db.commit()
+
+        except Exception as exc:
+            logger.exception("refresh_hardiness_zones: unexpected error")
+            finished_at = datetime.now(timezone.utc)
+            pipeline.status = "failed"
+            pipeline.finished_at = finished_at
+            pipeline.duration_ms = int((finished_at - started_at).total_seconds() * 1000)
+            pipeline.error_message = str(exc)
+            await db.commit()
+            raise
+
+    logger.info("refresh_hardiness_zones: complete — %d zones updated", records)
 
 
 async def sync_plant_database(ctx: dict) -> None:

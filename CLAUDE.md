@@ -2,9 +2,24 @@
 
 This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
+## On Session Start
+
+Read `docs/spec.md` in full before doing anything else. It is the project roadmap and source of truth for what has been built, what is in progress, and what comes next.
+
 ## What this is
 
 LoamBase is the FastAPI backend for LoamUI (frontend) and Mimus (admin panel). Stack: FastAPI + PostgreSQL (asyncpg) + Redis + ARQ. Everything runs in Docker.
+
+## Development Workflow
+
+This project uses a two-context workflow:
+
+- **claude.ai (browser)** — high-level planning, gameplan formation, prompt crafting, spec updates
+- **Claude Code** — implementation only, directed by prompts from the browser session
+
+Claude Code should not make architectural decisions independently. If something is ambiguous, flag it and ask rather than assume.
+
+**Standing rule — non-negotiable:** Every implementation session must end with both `docs/spec.md` AND `CLAUDE.md` updated to reflect what was built. A task is not complete until both files are current. This means: phase checklist updated, decisions log entries added, new gotchas recorded, background job statuses corrected.
 
 ## Commands
 
@@ -28,9 +43,23 @@ docker exec loambase-api alembic downgrade -1
 ```
 
 First-time setup requires creating the test database:
+
 ```bash
 docker exec postgres psql -U loambase -c "CREATE DATABASE loambase_test;"
 ```
+
+## Known Gotchas
+
+- Container naming: `loambase-loambase-api-1`, `loambase-loambase-worker-1` (not just `loambase-api`)
+- Scripts in `~/dev/loambase/scripts/` are not mounted in containers — use `docker cp` to get them in
+- After `.env` changes, restart both: `docker-compose restart loambase-worker loambase-api`
+- Plant table: seeder has only completed one run. Many records have NULL fields. All plant schema fields beyond PK and name must be Optional.
+- `image_url` on Plant model is `Text` type (not String) — Perenual S3 URLs exceed 500 chars
+- Garden model has no lat/lon fields — weather endpoints use the garden owner's `User.latitude` / `User.longitude`. Users without location set get a 422 response.
+- Open-Meteo snaps coordinates to nearest grid point — response `latitude`/`longitude` will differ slightly from the requested values
+- `sync_weather` ARQ cron is fully implemented (not a stub) as of 2026-02-24
+- PHZMapi returns coordinates as strings (not floats) — `ZoneCoordinates.lat`/`.lon` are `str`, not `float`
+- `GET /users/me/zone` returns only the stored zone string (no metadata) — use `POST /users/me/zone/refresh` to get temperature_range and coordinates from PHZMapi
 
 ## Architecture
 
@@ -51,7 +80,12 @@ docker exec postgres psql -U loambase -c "CREATE DATABASE loambase_test;"
 
 ### Background jobs
 
-`app/worker.py` defines ARQ cron jobs: weather sync (every 3h), hardiness zone refresh (daily), plant DB sync from Perenual (weekly). The worker runs as a separate Docker service (`loambase-worker`). Job functions are stubs pending implementation.
+`app/worker.py` defines ARQ cron jobs. The worker runs as a separate Docker service (`loambase-worker`).
+
+- `sync_weather` — **implemented** (2026-02-24): runs every 3h, fetches Open-Meteo for all active users with lat/lon, caches in Redis, upserts `WeatherCache` daily records, logs result to `PipelineRun`
+- `refresh_hardiness_zones` — **implemented** (2026-02-24): runs daily at 02:30, back-fills `User.hardiness_zone` for all active users who have `zip_code` but no zone, caches each zone in Redis for 30 days, logs to `PipelineRun`
+- `sync_plant_database` — stub (actual seeding is handled by the separate `seed_plants` task below)
+- `seed_plants` — **implemented**: daily Perenual seeder at 04:00, resume-safe (see Perenual Plant Seeder section)
 
 ### Data model hierarchy
 
