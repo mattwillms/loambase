@@ -32,6 +32,11 @@ class Settings(BaseSettings):
     SMTP_USER: str = ""
     SMTP_PASSWORD: str = ""
     EMAIL_FROM: str = "noreply@willms.co"
+    EMAIL_HOST: str = ""
+    EMAIL_PORT: int = 587
+    EMAIL_USERNAME: str = ""
+    EMAIL_PASSWORD: str = ""
+    EMAIL_TO: str = ""
 
     # App
     ENVIRONMENT: str = "development"

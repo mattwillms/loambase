@@ -1,27 +1,50 @@
 """
 ARQ task: seed the Plant catalog from Perenual.
 
-State is persisted in SeederRun so interrupted runs resume from the last
-completed page rather than restarting from page 1.
+Strategy
+--------
+Phase 1 — Backfill: fetch full detail for any existing perenual plants that are
+missing water_needs (inserted before detail fetching was added). Counts against
+the daily budget.
 
-Perenual free tier: 100 requests/day.
-Each page fetch = 1 request; each species detail fetch = 1 request.
-The task stops gracefully when the quota is exhausted and resumes the
-next time it runs.
+Phase 2 — Pagination: fetch one species-list page, then immediately fetch full
+detail for each new species on that page. Commit after each complete page.
+
+The daily request budget is capped at REQUEST_BUDGET. The task stops cleanly
+when the budget is reached and sends an email summary. SeederRun state is
+persisted so the next daily run resumes from the correct page.
+
+Completion condition: last page reached AND a final backfill pass completes
+without hitting the budget (i.e. no un-fetched plants remain). Future cron
+invocations are skipped via the "complete" status guard.
+
+Notifications
+-------------
+- Quota not reset at cron time: "LoamBase Seeder — Quota Not Reset"
+  Schedules a one-off ARQ retry at 05:00 if running inside the worker.
+- Budget exhausted / rate-limited mid-run: "LoamBase Seeder — Daily Run Complete"
+- All pages done: "LoamBase Seeder Complete"
+- Unexpected error: "LoamBase Seeder — Error"
 """
 import logging
+import math
 from datetime import datetime, timedelta, timezone
 from typing import Optional
 
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.db.session import AsyncSessionLocal
 from app.models.logs import SeederRun
 from app.models.plant import Plant
+from app.services.email import send_email
 from app.services.perenual import RateLimitError, fetch_species_detail, fetch_species_list
 
 logger = logging.getLogger(__name__)
+
+_REQUEST_BUDGET = 95
+_CRON_HOUR = 4    # daily seed_plants cron fires at this hour (local time)
+_RETRY_HOUR = 5   # quota-not-reset one-off retry at this hour (local time)
 
 
 # ── Field mapping helpers ──────────────────────────────────────────────────────
@@ -77,7 +100,6 @@ def _map_sun(sunlight: Optional[list]) -> Optional[str]:
 
 
 def _hardiness_zones(hardiness: Optional[dict]) -> Optional[list[str]]:
-    """Expand a {min, max} hardiness dict into a list of zone strings."""
     if not hardiness:
         return None
     try:
@@ -130,18 +152,38 @@ def _plant_kwargs(detail: dict) -> dict:
     }
 
 
+# ── Time helpers ───────────────────────────────────────────────────────────────
+
+def _next_cron_local() -> datetime:
+    """Tomorrow at _CRON_HOUR:00 in naive local time."""
+    now = datetime.now()
+    tomorrow = now.date() + timedelta(days=1)
+    return datetime(tomorrow.year, tomorrow.month, tomorrow.day, _CRON_HOUR, 0)
+
+
+def _retry_local() -> datetime:
+    """Today or tomorrow at _RETRY_HOUR:00, whichever is still in the future (naive local)."""
+    now = datetime.now()
+    candidate = now.replace(hour=_RETRY_HOUR, minute=0, second=0, microsecond=0)
+    if now >= candidate:
+        candidate += timedelta(days=1)
+    return candidate
+
+
+def _fmt(dt: datetime) -> str:
+    """Format a naive-local or aware datetime as 'Monday, Feb 24 at 4:00 AM'."""
+    if dt.tzinfo is not None:
+        dt = dt.astimezone().replace(tzinfo=None)
+    return dt.strftime("%A, %b %-d at %-I:%M %p")
+
+
 # ── DB helpers ─────────────────────────────────────────────────────────────────
 
 _STALE_THRESHOLD = timedelta(hours=2)
 
 
 async def _get_active_run(db: AsyncSession) -> Optional[SeederRun]:
-    """Return a running SeederRun that started within the last 2 hours.
-
-    Runs older than that are considered crashed/stale and are not treated as
-    blocking — the caller will start a fresh run which resumes from the saved
-    page.
-    """
+    """Return a running SeederRun started within the last 2 hours."""
     cutoff = datetime.now(timezone.utc) - _STALE_THRESHOLD
     result = await db.execute(
         select(SeederRun)
@@ -153,9 +195,15 @@ async def _get_active_run(db: AsyncSession) -> Optional[SeederRun]:
 
 
 async def _get_last_run(db: AsyncSession) -> Optional[SeederRun]:
-    """Return the most recent SeederRun regardless of status."""
     result = await db.execute(
         select(SeederRun).order_by(SeederRun.started_at.desc()).limit(1)
+    )
+    return result.scalar_one_or_none()
+
+
+async def _get_first_run(db: AsyncSession) -> Optional[SeederRun]:
+    result = await db.execute(
+        select(SeederRun).order_by(SeederRun.started_at).limit(1)
     )
     return result.scalar_one_or_none()
 
@@ -170,15 +218,176 @@ async def _plant_exists(db: AsyncSession, perenual_id: str) -> bool:
     return result.scalar_one_or_none() is not None
 
 
+async def _count_perenual_plants(db: AsyncSession) -> int:
+    result = await db.execute(
+        select(func.count()).select_from(Plant).where(Plant.source == "perenual")
+    )
+    return result.scalar_one()
+
+
+async def _get_plants_to_backfill(db: AsyncSession) -> list[Plant]:
+    """Plants inserted without full detail (water_needs IS NULL)."""
+    result = await db.execute(
+        select(Plant)
+        .where(Plant.source == "perenual", Plant.water_needs.is_(None))
+        .order_by(Plant.id)
+    )
+    return list(result.scalars().all())
+
+
+# ── Notification helpers ───────────────────────────────────────────────────────
+
+async def _notify_complete(db: AsyncSession, run: SeederRun) -> None:
+    total = await _count_perenual_plants(db)
+    first = await _get_first_run(db)
+    days_taken = 1
+    if first:
+        days_taken = max(1, (datetime.now(timezone.utc) - first.started_at).days + 1)
+
+    body = (
+        f"The Perenual plant catalog seeder has finished.\n\n"
+        f"Total records synced: {total:,}\n"
+        f"Final page: {run.current_page} / {run.total_pages}\n"
+        f"Total days taken: {days_taken}\n"
+    )
+    try:
+        await send_email("LoamBase Seeder Complete", body)
+    except Exception:
+        logger.exception("seed_plants: failed to send complete notification")
+
+
+async def _notify_daily(db: AsyncSession, run: SeederRun) -> None:
+    total = await _count_perenual_plants(db)
+
+    if run.total_pages is not None:
+        pages_remaining = max(0, run.total_pages - run.current_page)
+        pages_str = str(pages_remaining)
+        days_str = str(math.ceil(pages_remaining * 31 / _REQUEST_BUDGET)) if pages_remaining else "0"
+    else:
+        pages_str = "Unknown"
+        days_str = "Unknown"
+
+    body = (
+        f"Today's seeding run has reached the daily API request budget "
+        f"({_REQUEST_BUDGET} requests).\n\n"
+        f"Records synced today: {run.records_synced:,}\n"
+        f"Total records in catalog: {total:,}\n"
+        f"Current page: {run.current_page} / {run.total_pages or 'Unknown'}\n"
+        f"Pages remaining: {pages_str}\n"
+        f"Estimated days remaining: {days_str}\n\n"
+        f"Next run scheduled: {_fmt(_next_cron_local())}"
+    )
+    try:
+        await send_email("LoamBase Seeder — Daily Run Complete", body)
+    except Exception:
+        logger.exception("seed_plants: failed to send daily notification")
+
+
+async def _notify_quota_not_reset(ctx: dict, db: AsyncSession, run: SeederRun) -> None:
+    """
+    Send a 'Quota Not Reset' email when the very first API call of a run returns
+    429. Attempts to schedule a one-off ARQ retry at _RETRY_HOUR if the task is
+    running inside the worker (ctx has a 'redis' key).
+    """
+    total = await _count_perenual_plants(db)
+    retry_dt = _retry_local()
+    retry_utc = retry_dt.astimezone(timezone.utc)
+
+    # Schedule retry via ARQ if we have a worker context
+    scheduled = False
+    redis = ctx.get("redis")
+    if redis:
+        try:
+            await redis.enqueue_job("seed_plants", _defer_until=retry_utc)
+            logger.info("seed_plants: quota-not-reset retry scheduled at %s UTC", retry_utc)
+            scheduled = True
+        except Exception:
+            logger.exception("seed_plants: could not schedule ARQ retry")
+
+    next_line = (
+        f"Retry scheduled: {_fmt(retry_dt)}"
+        if scheduled
+        else f"Next run: {_fmt(_next_cron_local())} (daily cron)"
+    )
+
+    body = (
+        f"The Perenual daily API quota was not yet available at "
+        f"{_CRON_HOUR:02d}:00.\n\n"
+        f"Current page: {run.current_page} / {run.total_pages or 'Unknown'}\n"
+        f"Total records in catalog: {total:,}\n\n"
+        f"{next_line}"
+    )
+    try:
+        await send_email("LoamBase Seeder — Quota Not Reset", body)
+    except Exception:
+        logger.exception("seed_plants: failed to send quota-not-reset notification")
+
+
+async def _notify_error(db: AsyncSession, run: SeederRun, error: str) -> None:
+    body = (
+        f"The Perenual plant catalog seeder encountered an unexpected error.\n\n"
+        f"Error: {error}\n"
+        f"Last page reached: {run.current_page}\n"
+        f"Records synced this run: {run.records_synced:,}\n"
+    )
+    try:
+        await send_email("LoamBase Seeder — Error", body)
+    except Exception:
+        logger.exception("seed_plants: failed to send error notification")
+
+
+# ── Backfill phase ─────────────────────────────────────────────────────────────
+
+async def _backfill_nulls(db: AsyncSession, run: SeederRun) -> bool:
+    """
+    Fetch full detail for existing perenual plants missing water_needs.
+    Commits each plant update individually so partial progress is saved if the
+    budget runs out mid-backfill.
+
+    Returns True if the budget was exhausted or a rate-limit error occurred.
+    """
+    to_backfill = await _get_plants_to_backfill(db)
+    if not to_backfill:
+        return False
+
+    logger.info("seed_plants: backfill — %d plants with missing data", len(to_backfill))
+
+    for plant in to_backfill:
+        if run.requests_used >= _REQUEST_BUDGET:
+            logger.info("seed_plants: budget exhausted during backfill")
+            await db.commit()
+            return True
+
+        try:
+            detail = await fetch_species_detail(int(plant.external_id))
+        except RateLimitError as exc:
+            logger.warning("seed_plants: rate limited during backfill: %s", exc)
+            await db.commit()
+            return True
+
+        run.requests_used += 1
+
+        kwargs = _plant_kwargs(detail)
+        for field, value in kwargs.items():
+            if field not in ("source", "external_id", "is_user_defined"):
+                setattr(plant, field, value)
+
+        run.records_synced += 1
+        await db.commit()
+
+    logger.info("seed_plants: backfill complete")
+    return False
+
+
 # ── Main task ──────────────────────────────────────────────────────────────────
 
 async def seed_plants(ctx: dict) -> None:
     """
-    Paginate through the Perenual species list and upsert plants into the
-    local catalog. Persists progress in SeederRun for safe resumption.
+    Paginate through the Perenual species list and populate the Plant catalog.
+    Resumes from the last committed page on each daily run.
     """
     async with AsyncSessionLocal() as db:
-        # Guard: skip if a run is already in progress
+        # Guard: skip if a fresh run is already in progress
         if await _get_active_run(db):
             logger.info("seed_plants: run already in progress, skipping")
             return
@@ -189,10 +398,7 @@ async def seed_plants(ctx: dict) -> None:
             logger.info("seed_plants: catalog already complete, skipping")
             return
 
-        # Determine start page.
-        # current_page tracks the last successfully *committed* page, so we
-        # always resume from current_page + 1 (handles failed, stale-running,
-        # and fresh-start cases uniformly).
+        # Resume from the page after the last committed one
         start_page = (last.current_page + 1) if last else 1
         if start_page > 1:
             logger.info("seed_plants: resuming from page %d", start_page)
@@ -205,28 +411,60 @@ async def seed_plants(ctx: dict) -> None:
             started_at=datetime.now(timezone.utc),
         )
         db.add(run)
-        await db.commit()  # commit immediately so the run survives any later rollback
+        await db.commit()  # persist immediately so rollbacks don't lose the run record
 
         logger.info("seed_plants: starting (run_id=%d, start_page=%d)", run.id, start_page)
 
         try:
+            # ── Phase 1: Backfill plants missing detail ────────────────────
+            if await _backfill_nulls(db, run):
+                run.status = "failed"
+                run.error_message = (
+                    "Rate limited during backfill (quota not reset)"
+                    if run.requests_used == 0
+                    else f"Daily budget reached ({_REQUEST_BUDGET} requests) during backfill"
+                )
+                run.finished_at = datetime.now(timezone.utc)
+                await db.commit()
+
+                if run.requests_used == 0:
+                    await _notify_quota_not_reset(ctx, db, run)
+                else:
+                    await _notify_daily(db, run)
+                return
+
+            # ── Phase 2: Paginate new species ──────────────────────────────
             page = start_page
+            catalog_complete = False
+
             while True:
-                # ── Fetch species list page ────────────────────────────────
+                # Budget check before the list-page fetch (1 request)
+                if run.requests_used >= _REQUEST_BUDGET:
+                    logger.info("seed_plants: budget exhausted before page %d list fetch", page)
+                    break
+
                 logger.info("seed_plants: fetching page %d", page)
                 try:
                     page_data = await fetch_species_list(page)
                 except RateLimitError as exc:
                     logger.warning("seed_plants: rate limited on list fetch (page=%d): %s", page, exc)
                     run.status = "failed"
-                    run.error_message = f"Rate limited on page {page}: {exc}"
+                    run.error_message = (
+                        f"Quota not reset at {_CRON_HOUR:02d}:00 (page {page})"
+                        if run.requests_used == 0
+                        else f"Rate limited on page {page}: {exc}"
+                    )
                     run.finished_at = datetime.now(timezone.utc)
                     await db.commit()
+
+                    if run.requests_used == 0:
+                        await _notify_quota_not_reset(ctx, db, run)
+                    else:
+                        await _notify_daily(db, run)
                     return
 
                 run.requests_used += 1
 
-                # Set total_pages on first fetch
                 if run.total_pages is None:
                     run.total_pages = page_data.get("last_page")
                     logger.info("seed_plants: total pages = %s", run.total_pages)
@@ -234,20 +472,30 @@ async def seed_plants(ctx: dict) -> None:
                 species_list: list[dict] = page_data.get("data", [])
                 if not species_list:
                     logger.info("seed_plants: empty page %d, stopping", page)
+                    catalog_complete = True
                     break
 
-                # ── Process each species on this page ─────────────────────
+                # ── Fetch detail for each new species on this page ─────────
                 page_synced = 0
+                budget_hit = False
+
                 for species in species_list:
                     species_id = species.get("id")
                     if species_id is None:
                         continue
 
-                    perenual_id = str(species_id)
-                    if await _plant_exists(db, perenual_id):
+                    # Budget check before each detail fetch (1 request each)
+                    if run.requests_used >= _REQUEST_BUDGET:
+                        logger.info(
+                            "seed_plants: budget exhausted mid-page %d (after %d new plants)",
+                            page, page_synced,
+                        )
+                        budget_hit = True
+                        break
+
+                    if await _plant_exists(db, str(species_id)):
                         continue
 
-                    # Fetch full detail
                     try:
                         detail = await fetch_species_detail(species_id)
                     except RateLimitError as exc:
@@ -255,45 +503,68 @@ async def seed_plants(ctx: dict) -> None:
                             "seed_plants: rate limited on detail fetch (id=%d): %s",
                             species_id, exc,
                         )
-                        run.requests_used += 1
-                        run.status = "failed"
-                        run.error_message = f"Rate limited on species detail {species_id}: {exc}"
-                        run.current_page = page
-                        run.records_synced += page_synced
-                        run.finished_at = datetime.now(timezone.utc)
-                        await db.commit()
-                        return
+                        budget_hit = True
+                        break
 
                     run.requests_used += 1
-                    plant = Plant(**_plant_kwargs(detail))
-                    db.add(plant)
+                    db.add(Plant(**_plant_kwargs(detail)))
                     page_synced += 1
 
-                # ── Commit page progress ───────────────────────────────────
+                # ── Commit what we have for this page ──────────────────────
+                if budget_hit:
+                    # Don't advance current_page — next run retries from this page.
+                    # Commit partial inserts so the API calls aren't wasted;
+                    # _plant_exists will skip them on retry.
+                    run.records_synced += page_synced
+                    await db.commit()
+                    logger.info(
+                        "seed_plants: partial page %d committed (%d plants), stopping",
+                        page, page_synced,
+                    )
+                    break
+
                 run.current_page = page
                 run.records_synced += page_synced
                 await db.commit()
                 logger.info(
-                    "seed_plants: page %d done (+%d plants, total=%d, requests=%d)",
-                    page, page_synced, run.records_synced, run.requests_used,
+                    "seed_plants: page %d done (+%d plants, total=%d, requests=%d/%d)",
+                    page, page_synced, run.records_synced, run.requests_used, _REQUEST_BUDGET,
                 )
 
-                # Check if we've reached the last page
                 last_page = page_data.get("last_page", 1)
                 if page >= last_page:
                     logger.info("seed_plants: reached last page (%d), done", last_page)
+                    catalog_complete = True
                     break
 
                 page += 1
 
-            # All pages done
-            run.status = "complete"
-            run.finished_at = datetime.now(timezone.utc)
-            await db.commit()
-            logger.info(
-                "seed_plants: complete — %d plants synced over %d requests",
-                run.records_synced, run.requests_used,
-            )
+            # ── Finalise run ───────────────────────────────────────────────
+            if catalog_complete:
+                # Run a final backfill pass to clear any nulls from phase 2
+                # insertions. Completion requires last page reached AND this
+                # pass finishing without hitting the budget.
+                if await _backfill_nulls(db, run):
+                    run.status = "failed"
+                    run.error_message = "Budget reached during final backfill"
+                    run.finished_at = datetime.now(timezone.utc)
+                    await db.commit()
+                    await _notify_daily(db, run)
+                else:
+                    run.status = "complete"
+                    run.finished_at = datetime.now(timezone.utc)
+                    await db.commit()
+                    logger.info(
+                        "seed_plants: complete — %d plants synced over %d requests",
+                        run.records_synced, run.requests_used,
+                    )
+                    await _notify_complete(db, run)
+            else:
+                run.status = "failed"
+                run.error_message = f"Daily budget reached ({_REQUEST_BUDGET} requests)"
+                run.finished_at = datetime.now(timezone.utc)
+                await db.commit()
+                await _notify_daily(db, run)
 
         except Exception as exc:
             logger.exception("seed_plants: unexpected error: %s", exc)
@@ -305,4 +576,5 @@ async def seed_plants(ctx: dict) -> None:
                 await db.commit()
             except Exception:
                 logger.exception("seed_plants: could not persist failed status for run %d", run.id)
+            await _notify_error(db, run, str(exc))
             raise
