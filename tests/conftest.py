@@ -1,5 +1,3 @@
-import asyncio
-import pytest
 import pytest_asyncio
 from httpx import AsyncClient, ASGITransport
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
@@ -8,17 +6,10 @@ from app.db.base import Base
 from app.db.session import get_db
 from app.main import app
 
-TEST_DATABASE_URL = "postgresql+asyncpg://loambase:changeme@postgres:5432/loambase_test"
+TEST_DATABASE_URL = "postgresql+asyncpg://loambase:krp.thd5qgp_uke_NBY@postgres:5432/loambase_test"
 
 engine = create_async_engine(TEST_DATABASE_URL, echo=False)
 TestSessionLocal = async_sessionmaker(engine, class_=AsyncSession, expire_on_commit=False)
-
-
-@pytest.fixture(scope="session")
-def event_loop():
-    loop = asyncio.get_event_loop_policy().new_event_loop()
-    yield loop
-    loop.close()
 
 
 @pytest_asyncio.fixture(scope="session", autouse=True)

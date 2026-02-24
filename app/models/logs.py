@@ -10,6 +10,24 @@ from sqlalchemy.orm import Mapped, mapped_column, relationship
 from app.db.base import Base
 
 
+class SeederRun(Base):
+    __tablename__ = "seeder_runs"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    status: Mapped[str] = mapped_column(
+        Enum("running", "complete", "failed", name="seeder_status_enum")
+    )
+    current_page: Mapped[int] = mapped_column(Integer, default=0)
+    total_pages: Mapped[Optional[int]] = mapped_column(Integer)
+    records_synced: Mapped[int] = mapped_column(Integer, default=0)
+    requests_used: Mapped[int] = mapped_column(Integer, default=0)
+    started_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=lambda: datetime.now(timezone.utc)
+    )
+    finished_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True))
+    error_message: Mapped[Optional[str]] = mapped_column(Text)
+
+
 class WeatherCache(Base):
     __tablename__ = "weather_cache"
 

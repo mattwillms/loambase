@@ -48,7 +48,7 @@ class Plant(Base):
         Enum("perenual", "trefle", "usda", "user", name="plant_source_enum"), default="user"
     )
     external_id: Mapped[Optional[str]] = mapped_column(String(100))  # ID in source system
-    image_url: Mapped[Optional[str]] = mapped_column(String(500))
+    image_url: Mapped[Optional[str]] = mapped_column(Text)
     description: Mapped[Optional[str]] = mapped_column(Text)
 
     is_user_defined: Mapped[bool] = mapped_column(Boolean, default=False)

@@ -7,6 +7,7 @@ from arq import cron
 from arq.connections import RedisSettings
 
 from app.core.config import settings
+from app.tasks.seed_plants import seed_plants
 
 logger = logging.getLogger(__name__)
 
@@ -40,11 +41,12 @@ async def sync_plant_database(ctx: dict) -> None:
 
 class WorkerSettings:
     redis_settings = RedisSettings.from_dsn(settings.REDIS_URL)
-    functions = [sync_weather, refresh_hardiness_zones, sync_plant_database]
+    functions = [sync_weather, refresh_hardiness_zones, sync_plant_database, seed_plants]
     cron_jobs = [
         cron(sync_weather, hour={0, 3, 6, 9, 12, 15, 18, 21}, minute=0),
         cron(refresh_hardiness_zones, hour=2, minute=30),
         cron(sync_plant_database, weekday=0, hour=3, minute=0),  # Monday 3am
+        cron(seed_plants, hour=4, minute=0),  # Daily 4am
     ]
     on_startup = None
     on_shutdown = None

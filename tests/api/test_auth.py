@@ -1,8 +1,6 @@
-import pytest
 from httpx import AsyncClient
 
 
-@pytest.mark.asyncio
 async def test_register(client: AsyncClient):
     res = await client.post("/api/v1/auth/register", json={
         "name": "Test User",
@@ -15,7 +13,6 @@ async def test_register(client: AsyncClient):
     assert data["role"] == "user"
 
 
-@pytest.mark.asyncio
 async def test_register_duplicate_email(client: AsyncClient):
     payload = {"name": "Alice", "email": "alice@example.com", "password": "pw123"}
     await client.post("/api/v1/auth/register", json=payload)
@@ -23,7 +20,6 @@ async def test_register_duplicate_email(client: AsyncClient):
     assert res.status_code == 400
 
 
-@pytest.mark.asyncio
 async def test_login(client: AsyncClient):
     await client.post("/api/v1/auth/register", json={
         "name": "Bob", "email": "bob@example.com", "password": "testpass"
@@ -37,7 +33,6 @@ async def test_login(client: AsyncClient):
     assert "refresh_token" in tokens
 
 
-@pytest.mark.asyncio
 async def test_login_wrong_password(client: AsyncClient):
     await client.post("/api/v1/auth/register", json={
         "name": "Carol", "email": "carol@example.com", "password": "correct"
@@ -48,7 +43,6 @@ async def test_login_wrong_password(client: AsyncClient):
     assert res.status_code == 401
 
 
-@pytest.mark.asyncio
 async def test_me(client: AsyncClient):
     await client.post("/api/v1/auth/register", json={
         "name": "Dave", "email": "dave@example.com", "password": "pw"
@@ -62,7 +56,6 @@ async def test_me(client: AsyncClient):
     assert res.json()["email"] == "dave@example.com"
 
 
-@pytest.mark.asyncio
 async def test_refresh(client: AsyncClient):
     await client.post("/api/v1/auth/register", json={
         "name": "Eve", "email": "eve@example.com", "password": "pw"
