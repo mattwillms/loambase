@@ -43,6 +43,10 @@ def _cache_key(lat: float, lon: float) -> str:
     return f"weather:{lat:.4f}:{lon:.4f}"
 
 
+def _forecast_cache_key(lat: float, lon: float) -> str:
+    return f"forecast:{lat:.4f}:{lon:.4f}"
+
+
 async def fetch_open_meteo(lat: float, lon: float) -> dict:
     """Raw HTTP call to Open-Meteo. Returns parsed JSON."""
     url = f"{settings.OPEN_METEO_BASE_URL}/forecast"
@@ -121,6 +125,58 @@ async def get_weather(lat: float, lon: float, redis: Any, db: AsyncSession) -> d
     await redis.setex(key, CACHE_TTL_SECONDS, json.dumps(result))
     await _upsert_daily_record(db, result)
 
+    return result
+
+
+async def get_forecast(lat: float, lon: float, redis: Any, db: AsyncSession) -> list[dict]:
+    """
+    Return a 3-day precipitation/temperature forecast for the given location.
+
+    Hits Redis cache first (key: forecast:{lat}:{lon}, TTL 3h). On miss: fetches
+    Open-Meteo with forecast_days=3 and daily fields only. Does NOT upsert to DB.
+    """
+    key = _forecast_cache_key(lat, lon)
+
+    cached = await redis.get(key)
+    if cached is not None:
+        logger.debug("forecast cache hit: %s", key)
+        raw_str = cached.decode("utf-8") if isinstance(cached, bytes) else cached
+        return json.loads(raw_str)
+
+    logger.debug("forecast cache miss: %s — fetching Open-Meteo", key)
+    url = f"{settings.OPEN_METEO_BASE_URL}/forecast"
+    params = {
+        "latitude": lat,
+        "longitude": lon,
+        "daily": "precipitation_sum,temperature_2m_max,temperature_2m_min",
+        "temperature_unit": "fahrenheit",
+        "precipitation_unit": "inch",
+        "forecast_days": 3,
+        "timezone": "auto",
+    }
+    async with httpx.AsyncClient(timeout=15.0) as client:
+        resp = await client.get(url, params=params)
+        resp.raise_for_status()
+        raw = resp.json()
+
+    daily = raw.get("daily", {})
+    dates = daily.get("time", [])
+    precip = daily.get("precipitation_sum", [])
+    highs = daily.get("temperature_2m_max", [])
+    lows = daily.get("temperature_2m_min", [])
+
+    result = []
+    for i, d in enumerate(dates):
+        low = lows[i] if i < len(lows) else None
+        result.append({
+            "date": d,
+            "precip_inches": precip[i] if i < len(precip) else 0.0,
+            "high_temp_f": highs[i] if i < len(highs) else None,
+            "low_temp_f": low,
+            "frost_warning": bool(low is not None and low < 32.0),
+        })
+
+    await redis.setex(key, CACHE_TTL_SECONDS, json.dumps(result))
     return result
 
 
