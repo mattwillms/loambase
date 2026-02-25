@@ -7,6 +7,7 @@ from app.models.garden import Bed, Garden
 from app.schemas.garden import BedCreate, BedRead, BedUpdate, GardenCreate, GardenRead, GardenUpdate
 
 router = APIRouter(prefix="/gardens", tags=["gardens"])
+beds_router = APIRouter(prefix="/beds", tags=["beds"])
 
 
 # ── Gardens ──────────────────────────────────────────────────────────────────
@@ -74,6 +75,26 @@ async def create_bed(
     return bed
 
 
+# ── Bed routes (prefix /beds) ─────────────────────────────────────────────────
+
+
+@beds_router.get("/{bed_id}", response_model=BedRead)
+async def get_bed(bed_id: int, current_user: CurrentUser, db: AsyncSession = Depends(get_db)):
+    return await _get_owned_bed(db, bed_id, current_user.id)
+
+
+@beds_router.patch("/{bed_id}", response_model=BedRead)
+async def update_bed(
+    bed_id: int, data: BedUpdate, current_user: CurrentUser, db: AsyncSession = Depends(get_db)
+):
+    bed = await _get_owned_bed(db, bed_id, current_user.id)
+    for field, value in data.model_dump(exclude_unset=True).items():
+        setattr(bed, field, value)
+    await db.commit()
+    await db.refresh(bed)
+    return bed
+
+
 # ── Helpers ───────────────────────────────────────────────────────────────────
 
 
@@ -85,3 +106,13 @@ async def _get_owned_garden(db: AsyncSession, garden_id: int, user_id: int) -> G
     if not garden:
         raise HTTPException(status_code=404, detail="Garden not found")
     return garden
+
+
+async def _get_owned_bed(db: AsyncSession, bed_id: int, user_id: int) -> Bed:
+    result = await db.execute(
+        select(Bed).join(Garden, Bed.garden_id == Garden.id).where(Bed.id == bed_id, Garden.user_id == user_id)
+    )
+    bed = result.scalar_one_or_none()
+    if not bed:
+        raise HTTPException(status_code=404, detail="Bed not found")
+    return bed
