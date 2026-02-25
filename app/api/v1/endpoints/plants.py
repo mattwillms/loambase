@@ -1,10 +1,12 @@
 from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi.responses import Response
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.deps import CurrentUser, get_db
 from app.models.plant import Plant
 from app.schemas.plant import PlantListResponse, PlantRead, PlantSummary
+from app.services.image_proxy import get_plant_image
 
 router = APIRouter(prefix="/plants", tags=["plants"])
 
@@ -42,6 +44,19 @@ async def list_plants(
     plants = result.scalars().all()
 
     return PlantListResponse(items=plants, total=total, page=page, per_page=per_page)
+
+
+@router.get("/{plant_id}/image", include_in_schema=True)
+async def get_plant_image_endpoint(plant_id: int, db: AsyncSession = Depends(get_db)):
+    """Proxy and cache a plant's image. No auth required — images are public data."""
+    result = await db.execute(select(Plant).where(Plant.id == plant_id))
+    plant = result.scalar_one_or_none()
+    if not plant:
+        raise HTTPException(status_code=404, detail="Plant not found")
+    if not plant.image_url:
+        raise HTTPException(status_code=404, detail="No image for this plant")
+    content, content_type = await get_plant_image(plant_id, plant.image_url)
+    return Response(content=content, media_type=content_type)
 
 
 @router.get("/{plant_id}", response_model=PlantRead)

@@ -46,6 +46,7 @@ services:
         condition: service_healthy
     volumes:
       - ./app:/app/app
+      - plant_images:/app/image_cache
     command: uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload
 
   loambase-worker:
@@ -61,8 +62,10 @@ services:
         condition: service_healthy
     volumes:
       - ./app:/app/app
+      - plant_images:/app/image_cache
     command: python -m app.worker
 
 volumes:
   postgres_data:
   redis_data:
+  plant_images:
