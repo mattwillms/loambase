@@ -1,7 +1,9 @@
-from datetime import date, datetime, timedelta
+from datetime import date, datetime
 from typing import Literal, Optional
 
 from pydantic import BaseModel, model_validator
+
+from app.schemas.treatment import TreatmentLogCreate, WateringLogCreate
 
 
 class ScheduleCreate(BaseModel):
@@ -89,3 +91,8 @@ class WateringGroupRead(BaseModel):
                 "planting_ids": [p.id for p in data.plantings],
             }
         return data
+
+
+class ScheduleCompleteRequest(BaseModel):
+    log_treatment: Optional[TreatmentLogCreate] = None
+    log_watering: Optional[WateringLogCreate] = None

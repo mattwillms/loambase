@@ -55,6 +55,7 @@ class Planting(Base):
     plant: Mapped["Plant"] = relationship(back_populates="plantings")
     schedules: Mapped[list["Schedule"]] = relationship(back_populates="planting", cascade="all, delete-orphan")
     treatment_logs: Mapped[list["TreatmentLog"]] = relationship(back_populates="planting", cascade="all, delete-orphan")
+    watering_logs: Mapped[list["WateringLog"]] = relationship(back_populates="planting", cascade="all, delete-orphan")
     journal_entries: Mapped[list["JournalEntry"]] = relationship(back_populates="planting")
     watering_group: Mapped[Optional["WateringGroup"]] = relationship(back_populates="plantings")
 
@@ -92,6 +93,8 @@ class Schedule(Base):
     # Relationships
     planting: Mapped[Optional["Planting"]] = relationship(back_populates="schedules")
     watering_group: Mapped[Optional["WateringGroup"]] = relationship(back_populates="schedule")
+    watering_logs: Mapped[list["WateringLog"]] = relationship(back_populates="schedule")
+    treatment_logs: Mapped[list["TreatmentLog"]] = relationship(back_populates="schedule")
 
 
 class WateringGroup(Base):
@@ -125,6 +128,7 @@ class TreatmentLog(Base):
     id: Mapped[int] = mapped_column(primary_key=True)
     planting_id: Mapped[Optional[int]] = mapped_column(ForeignKey("plantings.id", ondelete="CASCADE"), index=True)
     bed_id: Mapped[Optional[int]] = mapped_column(ForeignKey("beds.id", ondelete="CASCADE"), index=True)
+    schedule_id: Mapped[Optional[int]] = mapped_column(ForeignKey("schedules.id", ondelete="SET NULL"), index=True)
 
     date: Mapped[date] = mapped_column(Date)
     treatment_type: Mapped[str] = mapped_column(
@@ -141,3 +145,30 @@ class TreatmentLog(Base):
 
     # Relationships
     planting: Mapped[Optional["Planting"]] = relationship(back_populates="treatment_logs")
+    schedule: Mapped[Optional["Schedule"]] = relationship(back_populates="treatment_logs")
+
+
+class WateringLog(Base):
+    __tablename__ = "watering_logs"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    planting_id: Mapped[Optional[int]] = mapped_column(ForeignKey("plantings.id", ondelete="CASCADE"), index=True)
+    bed_id: Mapped[Optional[int]] = mapped_column(ForeignKey("beds.id", ondelete="CASCADE"), index=True)
+    garden_id: Mapped[Optional[int]] = mapped_column(ForeignKey("gardens.id", ondelete="CASCADE"), index=True)
+    schedule_id: Mapped[Optional[int]] = mapped_column(ForeignKey("schedules.id", ondelete="SET NULL"), index=True)
+
+    date: Mapped[date] = mapped_column(Date)
+    amount_inches: Mapped[Optional[float]] = mapped_column(Float)
+    duration_minutes: Mapped[Optional[int]] = mapped_column(Integer)
+    method: Mapped[Optional[str]] = mapped_column(
+        Enum("drip", "hand", "sprinkler", "soaker", "other", name="watering_method_enum")
+    )
+    notes: Mapped[Optional[str]] = mapped_column(Text)
+
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=lambda: datetime.now(timezone.utc)
+    )
+
+    # Relationships
+    planting: Mapped[Optional["Planting"]] = relationship(back_populates="watering_logs")
+    schedule: Mapped[Optional["Schedule"]] = relationship(back_populates="watering_logs")

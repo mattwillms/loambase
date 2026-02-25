@@ -1,15 +1,16 @@
 from datetime import datetime, timedelta, timezone
 from typing import Optional
 
-from fastapi import APIRouter, Depends, HTTPException, Query, status
+from fastapi import APIRouter, Body, Depends, HTTPException, Query, status
 from sqlalchemy import and_, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
 from app.core.deps import CurrentUser, get_db
 from app.models.garden import Bed, Garden
-from app.models.schedule import Planting, Schedule, WateringGroup
+from app.models.schedule import Planting, Schedule, TreatmentLog, WateringGroup, WateringLog
 from app.schemas.schedule import (
+    ScheduleCompleteRequest,
     ScheduleCreate,
     ScheduleRead,
     ScheduleUpdate,
@@ -251,7 +252,10 @@ async def delete_schedule(
 
 @router.post("/{schedule_id}/complete", response_model=ScheduleRead)
 async def complete_schedule(
-    schedule_id: int, current_user: CurrentUser, db: AsyncSession = Depends(get_db)
+    schedule_id: int,
+    current_user: CurrentUser,
+    db: AsyncSession = Depends(get_db),
+    request: ScheduleCompleteRequest = Body(None),
 ):
     schedule = await _get_owned_schedule(db, schedule_id, current_user.id)
     now = datetime.now(timezone.utc)
@@ -259,6 +263,21 @@ async def complete_schedule(
     schedule.auto_adjusted = False
     if schedule.frequency_days:
         schedule.next_due = now.date() + timedelta(days=schedule.frequency_days)
+
+    if request is not None:
+        if request.log_treatment is not None:
+            treatment = TreatmentLog(
+                **request.log_treatment.model_dump(),
+                schedule_id=schedule.id,
+            )
+            db.add(treatment)
+        if request.log_watering is not None:
+            watering = WateringLog(
+                **request.log_watering.model_dump(),
+                schedule_id=schedule.id,
+            )
+            db.add(watering)
+
     await db.commit()
     await db.refresh(schedule)
     return schedule
