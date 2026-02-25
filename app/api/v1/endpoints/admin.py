@@ -60,10 +60,18 @@ async def get_health(
             "records_synced": None,
         }
     else:
-        # DB enum is "complete"; response normalises to "completed"
-        status_map = {"complete": "completed", "running": "running", "failed": "failed"}
+        # DB enum is "complete"; response normalises to "completed".
+        # A failed run caused by quota exhaustion is surfaced as "quota_reached".
+        if last_run.status == "failed" and last_run.error_message and (
+            last_run.error_message.startswith("Daily budget reached")
+            or last_run.error_message.startswith("Budget reached")
+        ):
+            run_status = "quota_reached"
+        else:
+            status_map = {"complete": "completed", "running": "running", "failed": "failed"}
+            run_status = status_map.get(last_run.status, "unknown")
         worker = {
-            "last_run_status": status_map.get(last_run.status, "unknown"),
+            "last_run_status": run_status,
             "last_run_at": last_run.finished_at,
             "records_synced": last_run.records_synced,
         }
