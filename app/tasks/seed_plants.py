@@ -21,7 +21,8 @@ invocations are skipped via the "complete" status guard.
 Notifications
 -------------
 - Quota not reset at cron time: "LoamBase Seeder — Quota Not Reset"
-  Schedules a one-off ARQ retry at 05:00 if running inside the worker.
+  In a worker context, schedules retries at 06:00, 09:00, and 12:00 UTC before
+  sending the email. Email is sent only if all three retries are also 429.
 - Budget exhausted / rate-limited mid-run: "LoamBase Seeder — Daily Run Complete"
 - All pages done: "LoamBase Seeder Complete"
 - Unexpected error: "LoamBase Seeder — Error"
@@ -43,8 +44,8 @@ from app.services.perenual import RateLimitError, fetch_species_detail, fetch_sp
 logger = logging.getLogger(__name__)
 
 _REQUEST_BUDGET = 95
-_CRON_HOUR = 4    # daily seed_plants cron fires at this hour (local time)
-_RETRY_HOUR = 5   # quota-not-reset one-off retry at this hour (local time)
+_CRON_HOUR = 4              # daily seed_plants ARQ cron fires at this UTC hour
+_RETRY_HOURS_UTC = [6, 9, 12]  # quota-not-reset retry schedule (UTC)
 
 
 # ── Field mapping helpers ──────────────────────────────────────────────────────
@@ -161,10 +162,10 @@ def _next_cron_local() -> datetime:
     return datetime(tomorrow.year, tomorrow.month, tomorrow.day, _CRON_HOUR, 0)
 
 
-def _retry_local() -> datetime:
-    """Today or tomorrow at _RETRY_HOUR:00, whichever is still in the future (naive local)."""
-    now = datetime.now()
-    candidate = now.replace(hour=_RETRY_HOUR, minute=0, second=0, microsecond=0)
+def _retry_utc(hour: int) -> datetime:
+    """Today at the given UTC hour; advances to tomorrow if that time has already passed."""
+    now = datetime.now(timezone.utc)
+    candidate = now.replace(hour=hour, minute=0, second=0, microsecond=0)
     if now >= candidate:
         candidate += timedelta(days=1)
     return candidate
@@ -283,40 +284,64 @@ async def _notify_daily(db: AsyncSession, run: SeederRun) -> None:
         logger.exception("seed_plants: failed to send daily notification")
 
 
-async def _notify_quota_not_reset(ctx: dict, db: AsyncSession, run: SeederRun) -> None:
+async def _handle_quota_not_reset(
+    ctx: dict, db: AsyncSession, run: SeederRun, retry_count: int
+) -> None:
     """
-    Send a 'Quota Not Reset' email when the very first API call of a run returns
-    429. Attempts to schedule a one-off ARQ retry at _RETRY_HOUR if the task is
-    running inside the worker (ctx has a 'redis' key).
-    """
-    total = await _count_perenual_plants(db)
-    retry_dt = _retry_local()
-    retry_utc = retry_dt.astimezone(timezone.utc)
+    Handle a quota-not-reset (429) response at the start of a run.
 
-    # Schedule retry via ARQ if we have a worker context
-    scheduled = False
+    In a worker context with retries remaining, enqueues the next attempt at the
+    next hour in _RETRY_HOURS_UTC and returns without sending an email — the email
+    is deferred until all retries are also exhausted.
+
+    On the final retry (retry_count == len(_RETRY_HOURS_UTC)), or when running
+    outside a worker context (manual trigger), sends a single summary email.
+    """
     redis = ctx.get("redis")
-    if redis:
+
+    if redis and retry_count < len(_RETRY_HOURS_UTC):
+        next_hour = _RETRY_HOURS_UTC[retry_count]
+        next_dt = _retry_utc(next_hour)
         try:
-            await redis.enqueue_job("seed_plants", _defer_until=retry_utc)
-            logger.info("seed_plants: quota-not-reset retry scheduled at %s UTC", retry_utc)
-            scheduled = True
+            await redis.enqueue_job(
+                "seed_plants",
+                retry_count=retry_count + 1,
+                _defer_until=next_dt,
+            )
+            logger.info(
+                "seed_plants: quota not reset — retry %d/%d scheduled at %02d:00 UTC",
+                retry_count + 1,
+                len(_RETRY_HOURS_UTC),
+                next_hour,
+            )
+            return  # email deferred; will fire after the final retry
         except Exception:
-            logger.exception("seed_plants: could not schedule ARQ retry")
+            logger.exception("seed_plants: could not schedule ARQ retry — sending email now")
+            # fall through to send the email immediately
 
-    next_line = (
-        f"Retry scheduled: {_fmt(retry_dt)}"
-        if scheduled
-        else f"Next run: {_fmt(_next_cron_local())} (daily cron)"
-    )
+    # Send email: all retries exhausted, manual context, or scheduling failed.
+    total = await _count_perenual_plants(db)
 
-    body = (
-        f"The Perenual daily API quota was not yet available at "
-        f"{_CRON_HOUR:02d}:00.\n\n"
-        f"Current page: {run.current_page} / {run.total_pages or 'Unknown'}\n"
-        f"Total records in catalog: {total:,}\n\n"
-        f"{next_line}"
-    )
+    if retry_count >= len(_RETRY_HOURS_UTC):
+        attempt_hours = [_CRON_HOUR] + _RETRY_HOURS_UTC
+        attempts_str = ", ".join(f"{h:02d}:00 UTC" for h in attempt_hours)
+        body = (
+            f"The Perenual daily API quota was unavailable at all scheduled attempts.\n\n"
+            f"Attempts: {attempts_str} — all returned 429.\n"
+            f"Quota appears to be on a rolling 24-hour window, not a calendar-day reset.\n\n"
+            f"Current page: {run.current_page} / {run.total_pages or 'Unknown'}\n"
+            f"Total records in catalog: {total:,}\n\n"
+            f"Next run: {_fmt(_next_cron_local())} (daily cron)"
+        )
+    else:
+        body = (
+            f"The Perenual daily API quota was not yet available at "
+            f"{_CRON_HOUR:02d}:00 UTC.\n\n"
+            f"Current page: {run.current_page} / {run.total_pages or 'Unknown'}\n"
+            f"Total records in catalog: {total:,}\n\n"
+            f"Next run: {_fmt(_next_cron_local())} (daily cron)"
+        )
+
     try:
         await send_email("LoamBase Seeder — Quota Not Reset", body)
     except Exception:
@@ -381,10 +406,13 @@ async def _backfill_nulls(db: AsyncSession, run: SeederRun) -> bool:
 
 # ── Main task ──────────────────────────────────────────────────────────────────
 
-async def seed_plants(ctx: dict) -> None:
+async def seed_plants(ctx: dict, retry_count: int = 0) -> None:
     """
     Paginate through the Perenual species list and populate the Plant catalog.
     Resumes from the last committed page on each daily run.
+
+    retry_count is incremented by _handle_quota_not_reset each time an ARQ retry
+    is scheduled (0 = initial cron invocation, 1–3 = quota-not-reset retries).
     """
     async with AsyncSessionLocal() as db:
         # Guard: skip if a fresh run is already in progress
@@ -418,18 +446,18 @@ async def seed_plants(ctx: dict) -> None:
         try:
             # ── Phase 1: Backfill plants missing detail ────────────────────
             if await _backfill_nulls(db, run):
-                run.status = "failed"
-                run.error_message = (
-                    "Rate limited during backfill (quota not reset)"
-                    if run.requests_used == 0
-                    else f"Daily budget reached ({_REQUEST_BUDGET} requests) during backfill"
-                )
                 run.finished_at = datetime.now(timezone.utc)
-                await db.commit()
-
-                if run.requests_used == 0:
-                    await _notify_quota_not_reset(ctx, db, run)
+                if run.requests_used < _REQUEST_BUDGET:
+                    # RateLimitError (429) during backfill — quota not reset
+                    run.status = "failed"
+                    run.error_message = "Rate limited during backfill (quota not reset)"
+                    await db.commit()
+                    await _handle_quota_not_reset(ctx, db, run, retry_count)
                 else:
+                    # Budget cap reached during backfill
+                    run.status = "failed"
+                    run.error_message = f"Daily budget reached ({_REQUEST_BUDGET} requests) during backfill"
+                    await db.commit()
                     await _notify_daily(db, run)
                 return
 
@@ -450,7 +478,7 @@ async def seed_plants(ctx: dict) -> None:
                     logger.warning("seed_plants: rate limited on list fetch (page=%d): %s", page, exc)
                     run.status = "failed"
                     run.error_message = (
-                        f"Quota not reset at {_CRON_HOUR:02d}:00 (page {page})"
+                        f"Quota not reset at {_CRON_HOUR:02d}:00 UTC (page {page})"
                         if run.requests_used == 0
                         else f"Rate limited on page {page}: {exc}"
                     )
@@ -458,7 +486,7 @@ async def seed_plants(ctx: dict) -> None:
                     await db.commit()
 
                     if run.requests_used == 0:
-                        await _notify_quota_not_reset(ctx, db, run)
+                        await _handle_quota_not_reset(ctx, db, run, retry_count)
                     else:
                         await _notify_daily(db, run)
                     return
