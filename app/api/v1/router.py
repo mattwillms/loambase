@@ -1,6 +1,6 @@
 from fastapi import APIRouter
 
-from app.api.v1.endpoints import auth, gardens, plants, plantings, weather, zones
+from app.api.v1.endpoints import admin, auth, gardens, plants, plantings, weather, zones
 
 api_router = APIRouter()
 
@@ -11,3 +11,4 @@ api_router.include_router(plants.router)
 api_router.include_router(plantings.router)
 api_router.include_router(weather.router)
 api_router.include_router(zones.router)
+api_router.include_router(admin.router)
