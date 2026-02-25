@@ -33,6 +33,14 @@ class Planting(Base):
     notes: Mapped[Optional[str]] = mapped_column(Text)
     photos: Mapped[Optional[list[str]]] = mapped_column(ARRAY(String))
 
+    watering_group_id: Mapped[Optional[int]] = mapped_column(
+        ForeignKey(
+            "watering_groups.id", ondelete="SET NULL",
+            name="plantings_watering_group_id_fkey", use_alter=True,
+        ),
+        nullable=True, index=True,
+    )
+
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), default=lambda: datetime.now(timezone.utc)
     )
@@ -48,6 +56,7 @@ class Planting(Base):
     schedules: Mapped[list["Schedule"]] = relationship(back_populates="planting", cascade="all, delete-orphan")
     treatment_logs: Mapped[list["TreatmentLog"]] = relationship(back_populates="planting", cascade="all, delete-orphan")
     journal_entries: Mapped[list["JournalEntry"]] = relationship(back_populates="planting")
+    watering_group: Mapped[Optional["WateringGroup"]] = relationship(back_populates="plantings")
 
 
 class Schedule(Base):
@@ -82,6 +91,7 @@ class Schedule(Base):
 
     # Relationships
     planting: Mapped[Optional["Planting"]] = relationship(back_populates="schedules")
+    watering_group: Mapped[Optional["WateringGroup"]] = relationship(back_populates="schedule")
 
 
 class WateringGroup(Base):
@@ -90,14 +100,23 @@ class WateringGroup(Base):
     id: Mapped[int] = mapped_column(primary_key=True)
     garden_id: Mapped[int] = mapped_column(ForeignKey("gardens.id", ondelete="CASCADE"), index=True)
     name: Mapped[str] = mapped_column(String(100))
-    schedule_id: Mapped[Optional[int]] = mapped_column(ForeignKey("schedules.id"))
+    schedule_id: Mapped[Optional[int]] = mapped_column(
+        ForeignKey("schedules.id", name="watering_groups_schedule_id_fkey", use_alter=True)
+    )
 
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), default=lambda: datetime.now(timezone.utc)
     )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        default=lambda: datetime.now(timezone.utc),
+        onupdate=lambda: datetime.now(timezone.utc),
+    )
 
     # Relationships
     garden: Mapped["Garden"] = relationship(back_populates="watering_groups")
+    plantings: Mapped[list["Planting"]] = relationship(back_populates="watering_group")
+    schedule: Mapped[Optional["Schedule"]] = relationship(back_populates="watering_group")
 
 
 class TreatmentLog(Base):
