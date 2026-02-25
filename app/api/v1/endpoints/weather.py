@@ -26,6 +26,19 @@ async def get_redis():
     yield _get_redis()
 
 
+@router.get("/weather/current", response_model=WeatherRead)
+async def get_current_weather(
+    current_user: CurrentUser,
+    db: AsyncSession = Depends(get_db),
+    redis: aioredis.Redis = Depends(get_redis),
+):
+    if current_user.latitude is None or current_user.longitude is None:
+        raise HTTPException(status_code=422, detail="User location not set")
+
+    data = await get_weather(current_user.latitude, current_user.longitude, redis, db)
+    return WeatherRead(**data)
+
+
 @router.get("/gardens/{garden_id}/weather", response_model=WeatherRead)
 async def get_garden_weather(
     garden_id: int,

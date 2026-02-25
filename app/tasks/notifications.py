@@ -7,6 +7,10 @@ send_daily_digest — runs daily at 07:00 UTC
 send_frost_alerts — runs daily at 06:00 UTC
     Emails active located users when a frost warning is in effect for tonight.
     De-duplicated: skips if a frost notification was already sent today.
+
+send_heat_alerts — runs daily at 06:00 UTC
+    Emails active located users when high_temp_f >= 95°F today.
+    De-duplicated: skips if a heat notification was already sent today.
 """
 import logging
 from collections import Counter
@@ -20,6 +24,7 @@ from app.models.logs import NotificationLog, WeatherCache
 from app.models.schedule import Planting, Schedule
 from app.models.user import User
 from app.services.notifications import dispatch_notification
+from app.services.weather import get_weather
 
 logger = logging.getLogger(__name__)
 
@@ -100,7 +105,19 @@ async def send_frost_alerts(ctx: dict) -> None:
                 weather = weather_result.scalar_one_or_none()
 
                 if weather is None:
-                    logger.info("send_frost_alerts: no weather record for user %d, skipping", user.id)
+                    logger.info("send_frost_alerts: no weather record for user %d — fetching", user.id)
+                    await get_weather(user.latitude, user.longitude, ctx["redis"], db)
+                    weather_result2 = await db.execute(
+                        select(WeatherCache).where(
+                            WeatherCache.date == today,
+                            func.abs(WeatherCache.latitude - user.latitude) < 0.01,
+                            func.abs(WeatherCache.longitude - user.longitude) < 0.01,
+                        ).limit(1)
+                    )
+                    weather = weather_result2.scalar_one_or_none()
+
+                if weather is None:
+                    logger.warning("send_frost_alerts: still no weather record for user %d after fetch, skipping", user.id)
                     continue
 
                 if not weather.frost_warning:
@@ -135,6 +152,84 @@ async def send_frost_alerts(ctx: dict) -> None:
                 logger.exception("send_frost_alerts: failed for user %d: %s", user.id, exc)
 
     logger.info("send_frost_alerts: complete")
+
+
+async def send_heat_alerts(ctx: dict) -> None:
+    """Email active located users when a heat advisory is in effect today."""
+    logger.info("send_heat_alerts: starting")
+
+    today = date.today()
+    today_midnight_utc = datetime(today.year, today.month, today.day, tzinfo=timezone.utc)
+
+    async with AsyncSessionLocal() as db:
+        result = await db.execute(
+            select(User).where(
+                User.is_active == True,
+                User.latitude.isnot(None),
+                User.longitude.isnot(None),
+            )
+        )
+        users = result.scalars().all()
+
+        for user in users:
+            try:
+                # Find today's WeatherCache record near user's location
+                weather_result = await db.execute(
+                    select(WeatherCache).where(
+                        WeatherCache.date == today,
+                        func.abs(WeatherCache.latitude - user.latitude) < 0.01,
+                        func.abs(WeatherCache.longitude - user.longitude) < 0.01,
+                    ).limit(1)
+                )
+                weather = weather_result.scalar_one_or_none()
+
+                if weather is None:
+                    logger.info("send_heat_alerts: no weather record for user %d — fetching", user.id)
+                    await get_weather(user.latitude, user.longitude, ctx["redis"], db)
+                    weather_result2 = await db.execute(
+                        select(WeatherCache).where(
+                            WeatherCache.date == today,
+                            func.abs(WeatherCache.latitude - user.latitude) < 0.01,
+                            func.abs(WeatherCache.longitude - user.longitude) < 0.01,
+                        ).limit(1)
+                    )
+                    weather = weather_result2.scalar_one_or_none()
+
+                if weather is None:
+                    logger.warning("send_heat_alerts: still no weather record for user %d after fetch, skipping", user.id)
+                    continue
+
+                if weather.high_temp_f is None or weather.high_temp_f < 95.0:
+                    continue
+
+                # Deduplicate — skip if heat notification already sent today
+                existing_result = await db.execute(
+                    select(NotificationLog).where(
+                        NotificationLog.user_id == user.id,
+                        NotificationLog.notification_type == "heat",
+                        NotificationLog.timestamp >= today_midnight_utc,
+                    ).limit(1)
+                )
+                if existing_result.scalar_one_or_none() is not None:
+                    logger.info("send_heat_alerts: heat alert already sent today for user %d, skipping", user.id)
+                    continue
+
+                body = (
+                    f"Hi {user.name},\n\n"
+                    f"A heat advisory is in effect for your area today.\n\n"
+                    f"Forecast high: {weather.high_temp_f}°F\n"
+                    f"Location: ({user.latitude:.4f}, {user.longitude:.4f})\n\n"
+                    f"Consider watering early in the morning and providing shade for sensitive plants."
+                )
+                subject = "Loam — Heat advisory for today"
+
+                await dispatch_notification(db, user, "heat", subject, body)
+                logger.info("send_heat_alerts: sent heat alert to user %d", user.id)
+
+            except Exception as exc:
+                logger.exception("send_heat_alerts: failed for user %d: %s", user.id, exc)
+
+    logger.info("send_heat_alerts: complete")
 
 
 # ── Helpers ────────────────────────────────────────────────────────────────────
