@@ -1,9 +1,11 @@
 from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.orm import selectinload
 
 from app.core.deps import CurrentUser, get_db
 from app.models.garden import Bed, Garden
+from app.models.schedule import Planting
 from app.schemas.garden import BedCreate, BedRead, BedUpdate, GardenCreate, GardenRead, GardenUpdate
 
 router = APIRouter(prefix="/gardens", tags=["gardens"])
@@ -61,6 +63,37 @@ async def list_beds(garden_id: int, current_user: CurrentUser, db: AsyncSession 
     await _get_owned_garden(db, garden_id, current_user.id)
     result = await db.execute(select(Bed).where(Bed.garden_id == garden_id))
     return result.scalars().all()
+
+
+@router.get("/{garden_id}/plantings")
+async def list_garden_plantings(
+    garden_id: int,
+    current_user: CurrentUser,
+    db: AsyncSession = Depends(get_db),
+) -> list:
+    await _get_owned_garden(db, garden_id, current_user.id)
+    result = await db.execute(
+        select(Planting)
+        .join(Bed, Planting.bed_id == Bed.id)
+        .where(Bed.garden_id == garden_id)
+        .options(
+            selectinload(Planting.plant),
+            selectinload(Planting.bed),
+        )
+    )
+    plantings = result.scalars().all()
+    return [
+        {
+            "id": p.id,
+            "bed_id": p.bed_id,
+            "bed_name": p.bed.name,
+            "plant_id": p.plant_id,
+            "common_name": p.plant.common_name if p.plant else None,
+            "status": p.status,
+            "date_planted": p.date_planted.isoformat() if p.date_planted else None,
+        }
+        for p in plantings
+    ]
 
 
 @router.post("/{garden_id}/beds", response_model=BedRead, status_code=status.HTTP_201_CREATED)
