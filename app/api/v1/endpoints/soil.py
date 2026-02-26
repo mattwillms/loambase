@@ -6,10 +6,10 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.core.config import settings
 from app.core.deps import CurrentUser, get_db
 from app.models.garden import Garden
-from app.schemas.weather import WeatherRead
-from app.services.weather import get_weather
+from app.schemas.soil import SoilDataRead
+from app.services.soil import get_soil_data
 
-router = APIRouter(tags=["weather"])
+router = APIRouter(tags=["soil"])
 
 # Module-level Redis client (connection pool, created once on first use)
 _redis_client: aioredis.Redis | None = None
@@ -26,21 +26,8 @@ async def get_redis():
     yield _get_redis()
 
 
-@router.get("/weather/current", response_model=WeatherRead)
-async def get_current_weather(
-    current_user: CurrentUser,
-    db: AsyncSession = Depends(get_db),
-    redis: aioredis.Redis = Depends(get_redis),
-):
-    if current_user.latitude is None or current_user.longitude is None:
-        raise HTTPException(status_code=422, detail="User location not set")
-
-    data = await get_weather(current_user.latitude, current_user.longitude, redis, db)
-    return WeatherRead(**data)
-
-
-@router.get("/gardens/{garden_id}/weather", response_model=WeatherRead)
-async def get_garden_weather(
+@router.get("/gardens/{garden_id}/soil", response_model=SoilDataRead)
+async def get_garden_soil(
     garden_id: int,
     current_user: CurrentUser,
     db: AsyncSession = Depends(get_db),
@@ -56,10 +43,10 @@ async def get_garden_weather(
     lat = garden.latitude if garden.latitude is not None else current_user.latitude
     lon = garden.longitude if garden.longitude is not None else current_user.longitude
     if lat is None or lon is None:
-        raise HTTPException(
-            status_code=422,
-            detail="No location set — add lat/lon to this garden or your user profile",
-        )
+        raise HTTPException(status_code=422, detail="No location set for this garden or user profile")
 
-    data = await get_weather(lat, lon, redis, db)
-    return WeatherRead(**data)
+    data = await get_soil_data(lat, lon, redis)
+    if data is None:
+        raise HTTPException(status_code=404, detail="No soil data found for this location")
+
+    return SoilDataRead(**data)

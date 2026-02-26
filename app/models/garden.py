@@ -20,6 +20,8 @@ class Garden(Base):
     )
     soil_type: Mapped[Optional[str]] = mapped_column(String(100))
     irrigation_type: Mapped[Optional[str]] = mapped_column(String(100))
+    latitude: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
+    longitude: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
 
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), default=lambda: datetime.now(timezone.utc)

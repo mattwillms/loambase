@@ -10,6 +10,8 @@ class GardenCreate(BaseModel):
     sun_exposure: Optional[str] = None
     soil_type: Optional[str] = None
     irrigation_type: Optional[str] = None
+    latitude: Optional[float] = None
+    longitude: Optional[float] = None
 
 
 class GardenUpdate(GardenCreate):
@@ -25,6 +27,8 @@ class GardenRead(BaseModel):
     sun_exposure: Optional[str]
     soil_type: Optional[str]
     irrigation_type: Optional[str]
+    latitude: Optional[float]
+    longitude: Optional[float]
     created_at: datetime
     updated_at: datetime
 
