@@ -35,3 +35,10 @@ class UserRead(BaseModel):
 class UserAdminRead(UserRead):
     """Extended view for admin endpoints."""
     pass
+
+
+class UserStats(BaseModel):
+    gardens: int
+    beds: int
+    active_plantings: int
+    tasks_due_today: int

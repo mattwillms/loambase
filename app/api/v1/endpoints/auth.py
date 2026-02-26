@@ -13,11 +13,12 @@ from app.core.security import (
     verify_password,
 )
 from app.schemas.auth import RefreshRequest, TokenResponse
-from app.schemas.user import UserCreate, UserRead
+from app.schemas.user import UserCreate, UserRead, UserStats
 from app.services.user_service import (
     create_user,
     get_user_by_email,
     get_user_by_id,
+    get_user_stats,
     record_login,
 )
 
@@ -81,3 +82,8 @@ async def refresh(body: RefreshRequest, db: AsyncSession = Depends(get_db)):
 @router.get("/me", response_model=UserRead)
 async def me(current_user: CurrentUser):
     return current_user
+
+
+@router.get("/me/stats", response_model=UserStats)
+async def me_stats(current_user: CurrentUser, db: AsyncSession = Depends(get_db)):
+    return await get_user_stats(db, current_user.id)
