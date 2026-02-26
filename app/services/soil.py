@@ -14,12 +14,13 @@ _NONE_SENTINEL = "none"
 _QUERY = """
 SELECT
     co.compname AS soil_series_name,
-    ch.texdesc AS texture_class,
+    ctg.texdesc AS texture_class,
     co.drainagecl AS drainage_class,
     ch.ph1to1h2o_r AS ph_water,
     ch.om_r AS organic_matter_pct
 FROM component co
 LEFT JOIN chorizon ch ON ch.cokey = co.cokey AND ch.hzdept_r = 0
+LEFT JOIN chtexturegrp ctg ON ctg.chkey = ch.chkey AND ctg.rvindicator = 'Yes'
 WHERE co.mukey IN (
     SELECT DISTINCT mukey
     FROM SDA_Get_Mukey_from_intersection_with_WktWgs84('POINT({lon} {lat})')
@@ -43,8 +44,7 @@ async def get_soil_data(lat: float, lon: float, redis: aioredis.Redis) -> Option
         async with httpx.AsyncClient(timeout=30.0) as client:
             response = await client.post(
                 SSURGO_URL,
-                content=f"query={query}&format=JSON",
-                headers={"Content-Type": "application/x-www-form-urlencoded"},
+                data={"query": query, "format": "JSON"},
             )
             response.raise_for_status()
             payload = response.json()
