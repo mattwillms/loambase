@@ -17,4 +17,4 @@ Swagger UI at `http://localhost:8000/docs`
 ## Repos
 
 - Frontend: [loamui](https://github.com/mattwillms/loamui)
-- Admin: mimus
+- Admin: [mimus](https://github.com/mattwillms/mimus)
