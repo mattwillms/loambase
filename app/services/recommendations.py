@@ -1,8 +1,9 @@
+from datetime import date, timedelta
 from typing import Any, Optional
 
 from sqlalchemy import and_, func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy.orm import joinedload
+from sqlalchemy.orm import joinedload, selectinload
 
 from app.models.garden import Bed, Garden
 from app.models.plant import Plant
@@ -10,6 +11,8 @@ from app.models.schedule import Planting, Schedule
 from app.models.user import User
 from app.schemas.recommendation import CompanionEntry, CompanionPlantDetail, CompanionRecommendation
 from app.services.weather import get_forecast
+
+WATER_FREQ: dict[str, int] = {"low": 14, "medium": 7, "high": 3}
 
 SUPPRESSION_THRESHOLD_INCHES = 0.25
 
@@ -96,6 +99,73 @@ async def get_watering_recommendations(
         })
 
     return recommendations
+
+
+async def generate_planting_schedules(
+    planting_id: int,
+    db: AsyncSession,
+) -> list[Schedule]:
+    # Load the planting with its plant
+    result = await db.execute(
+        select(Planting)
+        .where(Planting.id == planting_id)
+        .options(selectinload(Planting.plant))
+    )
+    planting = result.scalar_one_or_none()
+    if planting is None or planting.plant is None:
+        return []
+
+    # Skip if schedules already exist
+    count_result = await db.execute(
+        select(func.count(Schedule.id)).where(Schedule.planting_id == planting_id)
+    )
+    if (count_result.scalar() or 0) > 0:
+        return []
+
+    plant = planting.plant
+    today = date.today()
+    schedules: list[Schedule] = []
+
+    # Watering
+    if plant.water_needs in WATER_FREQ:
+        schedules.append(Schedule(
+            planting_id=planting_id,
+            schedule_type="water",
+            frequency_days=WATER_FREQ[plant.water_needs],
+            next_due=today,
+            is_active=True,
+        ))
+
+    # Fertilizing
+    if plant.fertilizer_needs is not None:
+        schedules.append(Schedule(
+            planting_id=planting_id,
+            schedule_type="fertilize",
+            frequency_days=30,
+            next_due=today,
+            is_active=True,
+        ))
+
+    # Spraying
+    has_pests = bool(plant.common_pests)
+    has_diseases = bool(plant.common_diseases)
+    if has_pests or has_diseases:
+        schedules.append(Schedule(
+            planting_id=planting_id,
+            schedule_type="spray",
+            frequency_days=14,
+            next_due=today,
+            is_active=True,
+        ))
+
+    if not schedules:
+        return []
+
+    db.add_all(schedules)
+    await db.commit()
+    for s in schedules:
+        await db.refresh(s)
+    return schedules
 
 
 async def get_companion_recommendations(

@@ -36,3 +36,17 @@ class CompanionRecommendation(BaseModel):
     plant_name: str
     companions: list[CompanionEntry]
     antagonists: list[CompanionEntry]
+
+
+class SeasonalTaskItem(BaseModel):
+    title: str
+    description: str
+    task_type: str
+    urgency: str
+
+
+class SeasonalTaskResponse(BaseModel):
+    zone: Optional[str] = None
+    month: int
+    zone_missing: bool
+    tasks: list[SeasonalTaskItem]

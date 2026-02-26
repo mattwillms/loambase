@@ -7,6 +7,7 @@ from app.core.deps import CurrentUser, get_db
 from app.models.garden import Bed, Garden
 from app.models.schedule import Planting
 from app.schemas.planting import PlantingCreate, PlantingRead, PlantingUpdate
+from app.services.recommendations import generate_planting_schedules
 
 router = APIRouter(tags=["plantings"])
 
@@ -22,6 +23,11 @@ async def create_planting(
     planting = Planting(**data.model_dump())
     db.add(planting)
     await db.commit()
+    # Auto-generate schedules from plant data (best-effort)
+    try:
+        await generate_planting_schedules(planting.id, db)
+    except Exception:
+        pass
     return await _load_planting(db, planting.id)
 
 
@@ -53,6 +59,18 @@ async def delete_planting(
     planting = await _get_owned_planting(db, planting_id, current_user.id)
     await db.delete(planting)
     await db.commit()
+
+
+# ── Generate schedules ────────────────────────────────────────────────────────
+
+
+@router.post("/plantings/{planting_id}/generate-schedules")
+async def generate_schedules(
+    planting_id: int, current_user: CurrentUser, db: AsyncSession = Depends(get_db)
+):
+    await _get_owned_planting(db, planting_id, current_user.id)
+    schedules = await generate_planting_schedules(planting_id, db)
+    return {"generated": len(schedules), "schedule_ids": [s.id for s in schedules]}
 
 
 # ── Bed plantings list ────────────────────────────────────────────────────────

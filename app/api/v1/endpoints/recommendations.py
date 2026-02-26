@@ -1,11 +1,19 @@
+from datetime import datetime, timezone
+
 import redis.asyncio as aioredis
 from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import settings
 from app.core.deps import CurrentUser, get_db
-from app.schemas.recommendation import CompanionRecommendation, WateringRecommendation
+from app.schemas.recommendation import (
+    CompanionRecommendation,
+    SeasonalTaskItem,
+    SeasonalTaskResponse,
+    WateringRecommendation,
+)
 from app.services.recommendations import get_companion_recommendations, get_watering_recommendations
+from app.services.seasonal_tasks import get_seasonal_tasks
 
 router = APIRouter(prefix="/recommendations", tags=["recommendations"])
 
@@ -43,3 +51,37 @@ async def companion_recommendations(
     if result is None:
         raise HTTPException(status_code=404, detail="Plant not found")
     return result
+
+
+@router.get("/tasks", response_model=SeasonalTaskResponse)
+async def seasonal_task_recommendations(
+    current_user: CurrentUser,
+):
+    zone = current_user.hardiness_zone
+    month = datetime.now(timezone.utc).month
+
+    if zone is None:
+        return SeasonalTaskResponse(
+            zone=None,
+            month=month,
+            zone_missing=True,
+            tasks=[],
+        )
+
+    raw_tasks = get_seasonal_tasks(zone, month)
+    tasks = [
+        SeasonalTaskItem(
+            title=t.title,
+            description=t.description,
+            task_type=t.task_type,
+            urgency=t.urgency,
+        )
+        for t in raw_tasks
+    ]
+
+    return SeasonalTaskResponse(
+        zone=zone,
+        month=month,
+        zone_missing=False,
+        tasks=tasks,
+    )
