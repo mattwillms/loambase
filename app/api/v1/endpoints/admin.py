@@ -8,8 +8,10 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import settings
 from app.core.deps import AdminUser, get_db
+from app.core.security import hash_password
 from app.models.logs import NotificationLog, PipelineRun, SeederRun, WeatherCache
 from app.models.user import User
+from app.schemas.user import AdminUserCreate, AdminUserRead, AdminUserUpdate
 
 router = APIRouter(prefix="/admin", tags=["admin"])
 
@@ -118,6 +120,80 @@ async def list_users(
     ]
 
     return {"items": items, "total": total, "page": page, "per_page": per_page}
+
+
+@router.post("/users", response_model=AdminUserRead, status_code=201)
+async def create_user_admin(
+    data: AdminUserCreate,
+    admin_user: AdminUser,
+    db: AsyncSession = Depends(get_db),
+):
+    existing = await db.scalar(select(User).where(User.email == data.email))
+    if existing:
+        raise HTTPException(status_code=400, detail="Email already registered")
+    user = User(
+        name=data.name,
+        email=data.email,
+        hashed_password=hash_password(data.password),
+        role=data.role,
+        is_active=data.is_active,
+        timezone=data.timezone,
+        zip_code=data.zip_code,
+        hardiness_zone=data.hardiness_zone,
+        latitude=data.latitude,
+        longitude=data.longitude,
+    )
+    db.add(user)
+    await db.commit()
+    await db.refresh(user)
+    return user
+
+
+@router.get("/users/{user_id}", response_model=AdminUserRead)
+async def get_user_admin(
+    user_id: int,
+    admin_user: AdminUser,
+    db: AsyncSession = Depends(get_db),
+):
+    user = await db.scalar(select(User).where(User.id == user_id))
+    if not user:
+        raise HTTPException(status_code=404, detail="User not found")
+    return user
+
+
+@router.patch("/users/{user_id}", response_model=AdminUserRead)
+async def update_user_admin(
+    user_id: int,
+    data: AdminUserUpdate,
+    admin_user: AdminUser,
+    db: AsyncSession = Depends(get_db),
+):
+    user = await db.scalar(select(User).where(User.id == user_id))
+    if not user:
+        raise HTTPException(status_code=404, detail="User not found")
+    for field, value in data.model_dump(exclude_unset=True).items():
+        if field == "password":
+            setattr(user, "hashed_password", hash_password(value))
+        else:
+            setattr(user, field, value)
+    await db.commit()
+    await db.refresh(user)
+    return user
+
+
+@router.delete("/users/{user_id}", status_code=204)
+async def delete_user_admin(
+    user_id: int,
+    admin_user: AdminUser,
+    db: AsyncSession = Depends(get_db),
+):
+    user = await db.scalar(select(User).where(User.id == user_id))
+    if not user:
+        raise HTTPException(status_code=404, detail="User not found")
+    if user.id == admin_user.id:
+        raise HTTPException(status_code=400, detail="Cannot delete your own account")
+    await db.delete(user)
+    await db.commit()
 
 
 @router.get("/pipelines")
