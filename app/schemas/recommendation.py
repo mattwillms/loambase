@@ -13,3 +13,26 @@ class WateringRecommendation(BaseModel):
     skip_reason: Optional[str] = None
     precip_forecast_inches: Optional[float] = None
     weather_available: bool
+
+
+class CompanionPlantDetail(BaseModel):
+    id: int
+    common_name: str
+    plant_type: Optional[str] = None
+    sun_requirement: Optional[str] = None
+    water_needs: Optional[str] = None
+    image_url: Optional[str] = None
+    description: Optional[str] = None
+
+
+class CompanionEntry(BaseModel):
+    name: str
+    resolved: bool
+    plant: Optional[CompanionPlantDetail] = None
+
+
+class CompanionRecommendation(BaseModel):
+    plant_id: int
+    plant_name: str
+    companions: list[CompanionEntry]
+    antagonists: list[CompanionEntry]

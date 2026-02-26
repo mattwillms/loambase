@@ -1,12 +1,14 @@
-from typing import Any
+from typing import Any, Optional
 
-from sqlalchemy import and_, or_, select
+from sqlalchemy import and_, func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import joinedload
 
 from app.models.garden import Bed, Garden
+from app.models.plant import Plant
 from app.models.schedule import Planting, Schedule
 from app.models.user import User
+from app.schemas.recommendation import CompanionEntry, CompanionPlantDetail, CompanionRecommendation
 from app.services.weather import get_forecast
 
 SUPPRESSION_THRESHOLD_INCHES = 0.25
@@ -94,3 +96,58 @@ async def get_watering_recommendations(
         })
 
     return recommendations
+
+
+async def get_companion_recommendations(
+    plant_id: int, db: AsyncSession
+) -> Optional[CompanionRecommendation]:
+    result = await db.execute(select(Plant).where(Plant.id == plant_id))
+    plant = result.scalar_one_or_none()
+    if plant is None:
+        return None
+
+    companion_names: list[str] = plant.companion_plants or []
+    antagonist_names: list[str] = plant.antagonist_plants or []
+
+    # Resolve names to Plant rows in a single query per list
+    async def _resolve(names: list[str]) -> dict[str, Plant]:
+        if not names:
+            return {}
+        lower_names = [n.lower() for n in names]
+        rows = await db.execute(
+            select(Plant).where(func.lower(Plant.common_name).in_(lower_names))
+        )
+        plants = rows.scalars().all()
+        return {p.common_name.lower(): p for p in plants}
+
+    companion_map = await _resolve(companion_names)
+    antagonist_map = await _resolve(antagonist_names)
+
+    def _build_entries(names: list[str], plant_map: dict[str, Plant]) -> list[CompanionEntry]:
+        entries = []
+        for name in names:
+            matched = plant_map.get(name.lower())
+            if matched:
+                entries.append(CompanionEntry(
+                    name=name,
+                    resolved=True,
+                    plant=CompanionPlantDetail(
+                        id=matched.id,
+                        common_name=matched.common_name,
+                        plant_type=matched.plant_type,
+                        sun_requirement=matched.sun_requirement,
+                        water_needs=matched.water_needs,
+                        image_url=matched.image_url,
+                        description=matched.description,
+                    ),
+                ))
+            else:
+                entries.append(CompanionEntry(name=name, resolved=False, plant=None))
+        return entries
+
+    return CompanionRecommendation(
+        plant_id=plant.id,
+        plant_name=plant.common_name,
+        companions=_build_entries(companion_names, companion_map),
+        antagonists=_build_entries(antagonist_names, antagonist_map),
+    )

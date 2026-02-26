@@ -1,11 +1,11 @@
 import redis.asyncio as aioredis
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import settings
 from app.core.deps import CurrentUser, get_db
-from app.schemas.recommendation import WateringRecommendation
-from app.services.recommendations import get_watering_recommendations
+from app.schemas.recommendation import CompanionRecommendation, WateringRecommendation
+from app.services.recommendations import get_companion_recommendations, get_watering_recommendations
 
 router = APIRouter(prefix="/recommendations", tags=["recommendations"])
 
@@ -31,3 +31,15 @@ async def watering_recommendations(
     redis: aioredis.Redis = Depends(get_redis),
 ):
     return await get_watering_recommendations(current_user, db, redis)
+
+
+@router.get("/companions", response_model=CompanionRecommendation)
+async def companion_recommendations(
+    current_user: CurrentUser,
+    db: AsyncSession = Depends(get_db),
+    plant_id: int = Query(...),
+):
+    result = await get_companion_recommendations(plant_id, db)
+    if result is None:
+        raise HTTPException(status_code=404, detail="Plant not found")
+    return result
