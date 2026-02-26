@@ -115,6 +115,8 @@ async def list_users(
             "last_login": u.last_login,
             "hardiness_zone": u.hardiness_zone,
             "zip_code": u.zip_code,
+            "latitude": u.latitude,
+            "longitude": u.longitude,
         }
         for u in users
     ]
