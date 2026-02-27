@@ -11,6 +11,7 @@ from sqlalchemy import select
 
 from app.core.config import settings
 from app.db.session import AsyncSessionLocal
+from app.models.garden import Garden
 from app.models.logs import PipelineRun
 from app.models.user import User
 from app.services.hardiness import get_hardiness_zone
@@ -25,7 +26,7 @@ logger = logging.getLogger(__name__)
 
 
 async def sync_weather(ctx: dict) -> None:
-    """Poll Open-Meteo for all located users and update WeatherCache. Runs every 3 hours."""
+    """Poll Open-Meteo for all gardens with coordinates and update WeatherCache. Runs every 3 hours."""
     logger.info("sync_weather: starting")
     started_at = datetime.now(timezone.utc)
     records = 0
@@ -42,20 +43,19 @@ async def sync_weather(ctx: dict) -> None:
 
         try:
             result = await db.execute(
-                select(User).where(
-                    User.latitude.isnot(None),
-                    User.longitude.isnot(None),
-                    User.is_active == True,
+                select(Garden).where(
+                    Garden.latitude.isnot(None),
+                    Garden.longitude.isnot(None),
                 )
             )
-            users = result.scalars().all()
+            gardens = result.scalars().all()
 
-            for user in users:
+            for garden in gardens:
                 try:
-                    await get_weather(user.latitude, user.longitude, ctx["redis"], db)
+                    await get_weather(garden.latitude, garden.longitude, ctx["redis"], db)
                     records += 1
                 except Exception as exc:
-                    logger.warning("sync_weather: failed for user %d: %s", user.id, exc)
+                    logger.warning("sync_weather: failed for garden %d: %s", garden.id, exc)
 
             finished_at = datetime.now(timezone.utc)
             pipeline.status = "success"
@@ -74,7 +74,7 @@ async def sync_weather(ctx: dict) -> None:
             await db.commit()
             raise
 
-    logger.info("sync_weather: complete — %d locations updated", records)
+    logger.info("sync_weather: complete — %d garden locations updated", records)
 
 
 async def refresh_hardiness_zones(ctx: dict) -> None:

@@ -12,6 +12,7 @@ class PlantSummary(BaseModel):
     sun_requirement: Optional[str] = None
     water_needs: Optional[str] = None
     hardiness_zones: Optional[list[str]] = None
+    spacing_inches: Optional[float] = None
     image_url: Optional[str] = None
     source: str
 

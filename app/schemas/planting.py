@@ -35,6 +35,9 @@ class PlantingCreate(BaseModel):
     quantity: int = 1
     notes: Optional[str] = None
     photos: Optional[list[str]] = None
+    grid_x: Optional[int] = None
+    grid_y: Optional[int] = None
+    is_locked: bool = False
 
 
 class PlantingUpdate(BaseModel):
@@ -44,6 +47,9 @@ class PlantingUpdate(BaseModel):
     quantity: Optional[int] = None
     notes: Optional[str] = None
     photos: Optional[list[str]] = None
+    grid_x: Optional[int] = None
+    grid_y: Optional[int] = None
+    is_locked: Optional[bool] = None
 
 
 class PlantingRead(BaseModel):
@@ -56,6 +62,9 @@ class PlantingRead(BaseModel):
     quantity: int
     notes: Optional[str] = None
     photos: Optional[list[str]] = None
+    grid_x: Optional[int] = None
+    grid_y: Optional[int] = None
+    is_locked: bool = False
     created_at: datetime
     updated_at: datetime
     plant: Optional[PlantSummary] = None

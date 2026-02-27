@@ -137,7 +137,7 @@ async def send_frost_alerts(ctx: dict) -> None:
 
                 low_temp = weather.low_temp_f if weather.low_temp_f is not None else "unknown"
                 body = (
-                    f"Hi {user.name},\n\n"
+                    f"Hi {user.first_name},\n\n"
                     f"A frost warning is in effect for your location tonight.\n\n"
                     f"Forecast low: {low_temp}°F\n"
                     f"Location: ({user.latitude:.4f}, {user.longitude:.4f})\n\n"
@@ -215,7 +215,7 @@ async def send_heat_alerts(ctx: dict) -> None:
                     continue
 
                 body = (
-                    f"Hi {user.name},\n\n"
+                    f"Hi {user.first_name},\n\n"
                     f"A heat advisory is in effect for your area today.\n\n"
                     f"Forecast high: {weather.high_temp_f}°F\n"
                     f"Location: ({user.latitude:.4f}, {user.longitude:.4f})\n\n"
@@ -319,7 +319,7 @@ def _build_digest_body(
     today_tasks = [s for s in schedules if s.next_due == today]
     tomorrow_tasks = [s for s in schedules if s.next_due == tomorrow]
 
-    lines = [f"Hi {user.name},", "", "Here are your upcoming garden tasks:", ""]
+    lines = [f"Hi {user.first_name},", "", "Here are your upcoming garden tasks:", ""]
 
     if today_tasks:
         lines.append(f"Today ({today_str}):")

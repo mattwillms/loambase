@@ -1,3 +1,5 @@
+from datetime import date
+
 from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -21,6 +23,8 @@ async def create_planting(
 ):
     await _get_owned_bed(db, data.bed_id, current_user.id)
     planting = Planting(**data.model_dump())
+    if planting.date_planted is None:
+        planting.date_planted = date.today()
     db.add(planting)
     await db.commit()
     # Auto-generate schedules from plant data (best-effort)

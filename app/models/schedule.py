@@ -30,6 +30,10 @@ class Planting(Base):
         default="planned",
     )
 
+    grid_x: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+    grid_y: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+    is_locked: Mapped[bool] = mapped_column(Boolean, default=False, server_default="false")
+
     notes: Mapped[Optional[str]] = mapped_column(Text)
     photos: Mapped[Optional[list[str]]] = mapped_column(ARRAY(String))
 
