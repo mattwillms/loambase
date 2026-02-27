@@ -112,6 +112,7 @@ async def list_users(
             "email": u.email,
             "role": u.role,
             "is_active": u.is_active,
+            "timezone": u.timezone,
             "created_at": u.created_at,
             "last_login": u.last_login,
             "hardiness_zone": u.hardiness_zone,
