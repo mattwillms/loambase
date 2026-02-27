@@ -1,10 +1,11 @@
 from fastapi import APIRouter
 
-from app.api.v1.endpoints import admin, auth, gardens, journal, plants, plantings, recommendations, schedules, soil, treatments, weather, zones
+from app.api.v1.endpoints import admin, auth, gardens, journal, plants, plantings, recommendations, schedules, soil, treatments, users, weather, zones
 
 api_router = APIRouter()
 
 api_router.include_router(auth.router)
+api_router.include_router(users.router)
 api_router.include_router(gardens.router)
 api_router.include_router(gardens.beds_router)
 api_router.include_router(plants.router)
