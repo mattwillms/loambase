@@ -1,4 +1,4 @@
-from datetime import date, timedelta
+from datetime import date, datetime, timedelta
 from typing import Optional
 
 import redis.asyncio as aioredis
@@ -9,7 +9,10 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.core.config import settings
 from app.core.deps import AdminUser, get_db
 from app.core.security import hash_password
-from app.models.logs import NotificationLog, PipelineRun, SeederRun, WeatherCache
+from app.models.garden import Garden, Bed
+from app.models.logs import AuditLog, ApiRequestLog, NotificationLog, PipelineRun, SeederRun, WeatherCache
+from app.models.plant import Plant
+from app.models.schedule import Planting
 from app.models.user import User
 from app.schemas.user import AdminUserCreate, AdminUserRead, AdminUserUpdate
 
@@ -336,3 +339,158 @@ async def get_weather_analytics(
     ]
 
     return {"summary": summary, "records": items}
+
+
+@router.get("/analytics/gardens")
+async def get_garden_analytics(
+    admin_user: AdminUser,
+    db: AsyncSession = Depends(get_db),
+) -> dict:
+    user_count = await db.scalar(select(func.count()).select_from(User)) or 0
+    garden_count = await db.scalar(select(func.count()).select_from(Garden)) or 0
+    bed_count = await db.scalar(select(func.count()).select_from(Bed)) or 0
+    active_planting_count = (
+        await db.scalar(
+            select(func.count()).select_from(Planting).where(
+                Planting.status.not_in(["removed", "dormant"])
+            )
+        )
+        or 0
+    )
+
+    status_result = await db.execute(
+        select(Planting.status, func.count(Planting.id).label("count"))
+        .group_by(Planting.status)
+        .order_by(func.count(Planting.id).desc())
+    )
+    plantings_by_status = [
+        {"status": row.status, "count": row.count} for row in status_result
+    ]
+
+    top_result = await db.execute(
+        select(Plant.id, Plant.common_name, func.count(Planting.id).label("count"))
+        .join(Planting, Planting.plant_id == Plant.id)
+        .group_by(Plant.id, Plant.common_name)
+        .order_by(func.count(Planting.id).desc())
+        .limit(10)
+    )
+    top_plants = [
+        {"plant_id": row.id, "common_name": row.common_name, "count": row.count}
+        for row in top_result
+    ]
+
+    return {
+        "totals": {
+            "users": user_count,
+            "gardens": garden_count,
+            "beds": bed_count,
+            "active_plantings": active_planting_count,
+        },
+        "plantings_by_status": plantings_by_status,
+        "top_plants": top_plants,
+    }
+
+
+@router.get("/logs")
+async def list_api_logs(
+    admin_user: AdminUser,
+    db: AsyncSession = Depends(get_db),
+    endpoint: Optional[str] = Query(None),
+    status_code: Optional[int] = Query(None),
+    status_class: Optional[int] = Query(None),
+    since: Optional[datetime] = Query(None),
+    page: int = Query(1, ge=1),
+    per_page: int = Query(50, ge=1, le=100),
+) -> dict:
+    query = select(ApiRequestLog)
+    count_query = select(func.count()).select_from(ApiRequestLog)
+
+    if endpoint is not None:
+        query = query.where(ApiRequestLog.endpoint.ilike(f"%{endpoint}%"))
+        count_query = count_query.where(ApiRequestLog.endpoint.ilike(f"%{endpoint}%"))
+    if status_code is not None:
+        query = query.where(ApiRequestLog.status_code == status_code)
+        count_query = count_query.where(ApiRequestLog.status_code == status_code)
+    if status_class is not None:
+        lo = status_class * 100
+        hi = (status_class + 1) * 100
+        query = query.where(ApiRequestLog.status_code >= lo, ApiRequestLog.status_code < hi)
+        count_query = count_query.where(ApiRequestLog.status_code >= lo, ApiRequestLog.status_code < hi)
+    if since is not None:
+        query = query.where(ApiRequestLog.timestamp >= since)
+        count_query = count_query.where(ApiRequestLog.timestamp >= since)
+
+    total = await db.scalar(count_query) or 0
+    offset = (page - 1) * per_page
+    result = await db.execute(
+        query.order_by(ApiRequestLog.timestamp.desc()).offset(offset).limit(per_page)
+    )
+    logs = result.scalars().all()
+
+    items = [
+        {
+            "id": log.id,
+            "timestamp": log.timestamp,
+            "method": log.method,
+            "endpoint": log.endpoint,
+            "user_id": log.user_id,
+            "status_code": log.status_code,
+            "latency_ms": log.latency_ms,
+            "ip_address": log.ip_address,
+        }
+        for log in logs
+    ]
+
+    return {"items": items, "total": total, "page": page, "per_page": per_page}
+
+
+@router.get("/audit")
+async def list_audit_log(
+    admin_user: AdminUser,
+    db: AsyncSession = Depends(get_db),
+    action: Optional[str] = Query(None),
+    entity_type: Optional[str] = Query(None),
+    user_id: Optional[int] = Query(None),
+    since: Optional[datetime] = Query(None),
+    page: int = Query(1, ge=1),
+    per_page: int = Query(50, ge=1, le=100),
+) -> dict:
+    query = select(AuditLog, User.email).join(User, AuditLog.user_id == User.id, isouter=True)
+    count_query = select(func.count()).select_from(AuditLog)
+
+    if action is not None:
+        query = query.where(AuditLog.action == action)
+        count_query = count_query.where(AuditLog.action == action)
+    if entity_type is not None:
+        query = query.where(AuditLog.entity_type == entity_type)
+        count_query = count_query.where(AuditLog.entity_type == entity_type)
+    if user_id is not None:
+        query = query.where(AuditLog.user_id == user_id)
+        count_query = count_query.where(AuditLog.user_id == user_id)
+    if since is not None:
+        query = query.where(AuditLog.timestamp >= since)
+        count_query = count_query.where(AuditLog.timestamp >= since)
+
+    total = await db.scalar(count_query) or 0
+    offset = (page - 1) * per_page
+    result = await db.execute(
+        query.order_by(AuditLog.timestamp.desc()).offset(offset).limit(per_page)
+    )
+    rows = result.all()
+
+    items = [
+        {
+            "id": log.id,
+            "timestamp": log.timestamp,
+            "action": log.action,
+            "entity_type": log.entity_type,
+            "entity_id": log.entity_id,
+            "user_id": log.user_id,
+            "user_email": email,
+            "ip_address": log.ip_address,
+            "details": log.details,
+        }
+        for log, email in rows
+    ]
+
+    return {"items": items, "total": total, "page": page, "per_page": per_page}
