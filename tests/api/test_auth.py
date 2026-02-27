@@ -3,18 +3,21 @@ from httpx import AsyncClient
 
 async def test_register(client: AsyncClient):
     res = await client.post("/api/v1/auth/register", json={
-        "name": "Test User",
+        "first_name": "Test",
+        "last_name": "User",
         "email": "test@example.com",
         "password": "securepassword",
     })
     assert res.status_code == 201
     data = res.json()
     assert data["email"] == "test@example.com"
+    assert data["first_name"] == "Test"
+    assert data["last_name"] == "User"
     assert data["role"] == "user"
 
 
 async def test_register_duplicate_email(client: AsyncClient):
-    payload = {"name": "Alice", "email": "alice@example.com", "password": "pw123"}
+    payload = {"first_name": "Alice", "email": "alice@example.com", "password": "pw123"}
     await client.post("/api/v1/auth/register", json=payload)
     res = await client.post("/api/v1/auth/register", json=payload)
     assert res.status_code == 400
@@ -22,7 +25,7 @@ async def test_register_duplicate_email(client: AsyncClient):
 
 async def test_login(client: AsyncClient):
     await client.post("/api/v1/auth/register", json={
-        "name": "Bob", "email": "bob@example.com", "password": "testpass"
+        "first_name": "Bob", "email": "bob@example.com", "password": "testpass"
     })
     res = await client.post("/api/v1/auth/login", data={
         "username": "bob@example.com", "password": "testpass"
@@ -35,7 +38,7 @@ async def test_login(client: AsyncClient):
 
 async def test_login_wrong_password(client: AsyncClient):
     await client.post("/api/v1/auth/register", json={
-        "name": "Carol", "email": "carol@example.com", "password": "correct"
+        "first_name": "Carol", "email": "carol@example.com", "password": "correct"
     })
     res = await client.post("/api/v1/auth/login", data={
         "username": "carol@example.com", "password": "wrong"
@@ -45,7 +48,7 @@ async def test_login_wrong_password(client: AsyncClient):
 
 async def test_me(client: AsyncClient):
     await client.post("/api/v1/auth/register", json={
-        "name": "Dave", "email": "dave@example.com", "password": "pw"
+        "first_name": "Dave", "email": "dave@example.com", "password": "pw"
     })
     login = await client.post("/api/v1/auth/login", data={
         "username": "dave@example.com", "password": "pw"
@@ -58,7 +61,7 @@ async def test_me(client: AsyncClient):
 
 async def test_refresh(client: AsyncClient):
     await client.post("/api/v1/auth/register", json={
-        "name": "Eve", "email": "eve@example.com", "password": "pw"
+        "first_name": "Eve", "email": "eve@example.com", "password": "pw"
     })
     login = await client.post("/api/v1/auth/login", data={
         "username": "eve@example.com", "password": "pw"

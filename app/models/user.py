@@ -11,7 +11,8 @@ class User(Base):
     __tablename__ = "users"
 
     id: Mapped[int] = mapped_column(primary_key=True)
-    name: Mapped[str] = mapped_column(String(100))
+    first_name: Mapped[str] = mapped_column(String(100))
+    last_name: Mapped[Optional[str]] = mapped_column(String(100))
     email: Mapped[str] = mapped_column(String(255), unique=True, index=True)
     hashed_password: Mapped[str] = mapped_column(String(255))
     role: Mapped[str] = mapped_column(Enum("user", "admin", name="user_role"), default="user")

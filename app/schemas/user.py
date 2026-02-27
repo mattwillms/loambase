@@ -4,20 +4,23 @@ from pydantic import BaseModel, EmailStr
 
 
 class UserCreate(BaseModel):
-    name: str
+    first_name: str
+    last_name: Optional[str] = None
     email: EmailStr
     password: str
 
 
 class UserUpdate(BaseModel):
-    name: Optional[str] = None
+    first_name: Optional[str] = None
+    last_name: Optional[str] = None
     timezone: Optional[str] = None
     zip_code: Optional[str] = None
 
 
 class UserRead(BaseModel):
     id: int
-    name: str
+    first_name: str
+    last_name: Optional[str]
     email: str
     role: str
     is_active: bool
@@ -38,7 +41,8 @@ class UserAdminRead(UserRead):
 
 
 class AdminUserCreate(BaseModel):
-    name: str
+    first_name: str
+    last_name: Optional[str] = None
     email: EmailStr
     password: str
     role: str = "user"
@@ -51,7 +55,8 @@ class AdminUserCreate(BaseModel):
 
 
 class AdminUserUpdate(BaseModel):
-    name: Optional[str] = None
+    first_name: Optional[str] = None
+    last_name: Optional[str] = None
     email: Optional[EmailStr] = None
     password: Optional[str] = None
     role: Optional[str] = None
@@ -65,7 +70,8 @@ class AdminUserUpdate(BaseModel):
 
 class AdminUserRead(BaseModel):
     id: int
-    name: str
+    first_name: str
+    last_name: Optional[str]
     email: str
     role: str
     is_active: bool

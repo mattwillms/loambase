@@ -107,7 +107,8 @@ async def list_users(
     items = [
         {
             "id": u.id,
-            "name": u.name,
+            "first_name": u.first_name,
+            "last_name": u.last_name,
             "email": u.email,
             "role": u.role,
             "is_active": u.is_active,
@@ -134,7 +135,8 @@ async def create_user_admin(
     if existing:
         raise HTTPException(status_code=400, detail="Email already registered")
     user = User(
-        name=data.name,
+        first_name=data.first_name,
+        last_name=data.last_name,
         email=data.email,
         hashed_password=hash_password(data.password),
         role=data.role,
