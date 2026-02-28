@@ -16,6 +16,8 @@ from app.models.garden import Garden, Bed
 from app.models.logs import AuditLog, ApiRequestLog, NotificationLog, PipelineRun, SeederRun, WeatherCache
 from app.models.plant import Plant
 from app.models.schedule import Planting
+from app.models.source_perenual import PerenualPlant
+from app.models.source_permapeople import PermapeoplePlant
 from app.models.user import User
 from app.schemas.user import AdminUserCreate, AdminUserRead, AdminUserUpdate
 from app.tasks.fetch_utils import is_source_running
@@ -559,9 +561,10 @@ async def get_fetch_status(
     )
     pp_run = pp_result.scalar_one_or_none()
 
-    permapeople_status = None
+    pp_latest = None
     if pp_run:
-        permapeople_status = {
+        pp_latest = {
+            "id": pp_run.id,
             "status": pp_run.status,
             "started_at": pp_run.started_at,
             "finished_at": pp_run.finished_at,
@@ -571,9 +574,14 @@ async def get_fetch_status(
             "unchanged": pp_run.unchanged,
             "skipped": pp_run.skipped,
             "errors": pp_run.errors,
-            "error_detail": pp_run.error_detail,
             "triggered_by": pp_run.triggered_by,
         }
+
+    pp_total = await db.scalar(select(func.count()).select_from(PermapeoplePlant))
+    pp_matched = await db.scalar(
+        select(func.count()).select_from(PermapeoplePlant).where(PermapeoplePlant.plant_id.isnot(None))
+    )
+    pp_running = await is_source_running(db, "permapeople")
 
     # Latest SeederRun for perenual
     pr_result = await db.execute(
@@ -581,19 +589,116 @@ async def get_fetch_status(
     )
     pr_run = pr_result.scalar_one_or_none()
 
-    perenual_status = None
+    pr_latest = None
     if pr_run:
-        perenual_status = {
+        pr_latest = {
+            "id": pr_run.id,
             "status": pr_run.status,
             "started_at": pr_run.started_at,
             "finished_at": pr_run.finished_at,
-            "records_synced": pr_run.records_synced,
             "current_page": pr_run.current_page,
-            "total_pages": pr_run.total_pages,
-            "error_message": pr_run.error_message,
+            "records_synced": pr_run.records_synced,
+            "requests_used": pr_run.requests_used,
         }
 
+    pr_total = await db.scalar(select(func.count()).select_from(PerenualPlant))
+    pr_matched = await db.scalar(
+        select(func.count()).select_from(PerenualPlant).where(PerenualPlant.plant_id.isnot(None))
+    )
+    # Perenual uses SeederRun, check if latest is "running"
+    pr_running = pr_run is not None and pr_run.status == "running"
+
+    plants_total = await db.scalar(select(func.count()).select_from(Plant))
+
     return {
-        "permapeople": permapeople_status,
-        "perenual": perenual_status,
+        "permapeople": {
+            "latest_run": pp_latest,
+            "total_records": pp_total or 0,
+            "matched_to_plants": pp_matched or 0,
+            "is_running": pp_running,
+        },
+        "perenual": {
+            "latest_run": pr_latest,
+            "total_records": pr_total or 0,
+            "matched_to_plants": pr_matched or 0,
+            "is_running": pr_running,
+        },
+        "plants_total": plants_total or 0,
+    }
+
+
+@router.get("/fetch/history")
+async def get_fetch_history(
+    admin_user: AdminUser,
+    db: AsyncSession = Depends(get_db),
+    source: Optional[str] = Query(None),
+    page: int = Query(1, ge=1),
+    per_page: int = Query(20, ge=1, le=100),
+) -> dict:
+    """Paginated run history for data source fetchers."""
+    rows: list[dict] = []
+
+    # Gather DataSourceRun entries (permapeople)
+    if source is None or source == "permapeople":
+        dsr_result = await db.execute(
+            select(DataSourceRun)
+            .where(DataSourceRun.source == "permapeople")
+            .order_by(DataSourceRun.started_at.desc())
+        )
+        for run in dsr_result.scalars().all():
+            rows.append({
+                "id": run.id,
+                "source": "permapeople",
+                "status": run.status,
+                "started_at": run.started_at.isoformat() if run.started_at else None,
+                "finished_at": run.finished_at.isoformat() if run.finished_at else None,
+                "new_species": run.new_species,
+                "updated": run.updated,
+                "gap_filled": run.gap_filled,
+                "unchanged": run.unchanged,
+                "skipped": run.skipped,
+                "errors": run.errors,
+                "triggered_by": run.triggered_by,
+            })
+
+    # Gather SeederRun entries (perenual)
+    if source is None or source == "perenual":
+        sr_result = await db.execute(
+            select(SeederRun).order_by(SeederRun.started_at.desc())
+        )
+        for run in sr_result.scalars().all():
+            # Normalize status: SeederRun uses "complete" → "completed"
+            status = run.status
+            if status == "complete":
+                status = "completed"
+            rows.append({
+                "id": run.id,
+                "source": "perenual",
+                "status": status,
+                "started_at": run.started_at.isoformat() if run.started_at else None,
+                "finished_at": run.finished_at.isoformat() if run.finished_at else None,
+                "new_species": None,
+                "updated": None,
+                "gap_filled": None,
+                "unchanged": None,
+                "skipped": None,
+                "errors": None,
+                "triggered_by": "cron",
+                "current_page": run.current_page,
+                "records_synced": run.records_synced,
+                "requests_used": run.requests_used,
+            })
+
+    # Sort combined by started_at DESC
+    rows.sort(key=lambda r: r["started_at"] or "", reverse=True)
+
+    total = len(rows)
+    start = (page - 1) * per_page
+    end = start + per_page
+
+    return {
+        "items": rows[start:end],
+        "total": total,
+        "page": page,
+        "per_page": per_page,
     }
