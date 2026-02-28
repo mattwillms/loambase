@@ -48,6 +48,21 @@ async def find_plant_by_scientific_name(db: AsyncSession, sci_name: str) -> Opti
     return result.scalar_one_or_none()
 
 
+async def find_plant_by_name(
+    db: AsyncSession, sci_name: str, common_name: str,
+) -> Optional[Plant]:
+    """Find a canonical plant by scientific_name + common_name (case-insensitive)."""
+    result = await db.execute(
+        select(Plant)
+        .where(
+            func.lower(Plant.scientific_name) == func.lower(sci_name),
+            func.lower(Plant.common_name) == func.lower(common_name),
+        )
+        .limit(1)
+    )
+    return result.scalar_one_or_none()
+
+
 # ── DataSourceRun lifecycle ───────────────────────────────────────────────────
 
 def start_run(db: AsyncSession, source: str, triggered_by: str) -> DataSourceRun:

@@ -37,6 +37,8 @@ from app.tasks.fetch_utils import (
 
 logger = logging.getLogger(__name__)
 
+from collections import defaultdict
+
 BATCH_SIZE = 500
 
 
@@ -530,6 +532,24 @@ STRATEGY_FN = {
 }
 
 
+# ── Best-row selection ───────────────────────────────────────────────────
+
+def _select_best_source_row(rows: list) -> Any:
+    """Pick the source row with the most non-null columns (richest data)."""
+    if not rows:
+        return None
+    if len(rows) == 1:
+        return rows[0]
+    best = rows[0]
+    best_count = sum(1 for c in best.__table__.columns if getattr(best, c.name, None) is not None)
+    for row in rows[1:]:
+        count = sum(1 for c in row.__table__.columns if getattr(row, c.name, None) is not None)
+        if count > best_count:
+            best = row
+            best_count = count
+    return best
+
+
 # ── Coverage query ───────────────────────────────────────────────────────────
 
 async def _query_coverage(db: AsyncSession) -> dict[str, int]:
@@ -686,7 +706,27 @@ async def enrich_plants(ctx: dict, triggered_by: str = "manual") -> None:
                 if not rows:
                     break
 
-                for plant, permapeople_row, perenual_row in rows:
+                # Group by plant to handle multiple source rows per plant
+                grouped: dict[int, dict] = defaultdict(
+                    lambda: {"plant": None, "permapeople": [], "perenual": []}
+                )
+                seen_pp: set[int] = set()
+                seen_pn: set[int] = set()
+                for plant, pp_row, pn_row in rows:
+                    g = grouped[plant.id]
+                    g["plant"] = plant
+                    if pp_row and pp_row.id not in seen_pp:
+                        seen_pp.add(pp_row.id)
+                        g["permapeople"].append(pp_row)
+                    if pn_row and pn_row.id not in seen_pn:
+                        seen_pn.add(pn_row.id)
+                        g["perenual"].append(pn_row)
+
+                for group in grouped.values():
+                    plant = group["plant"]
+                    permapeople_row = _select_best_source_row(group["permapeople"])
+                    perenual_row = _select_best_source_row(group["perenual"])
+
                     if permapeople_row is None and perenual_row is None:
                         stats["skipped"] += 1
                         continue
@@ -767,7 +807,7 @@ async def enrich_plants(ctx: dict, triggered_by: str = "manual") -> None:
                         error_messages.append(f"Plant {plant.id} ({sci}): {exc}")
                         logger.warning("enrich_plants: error on plant %d: %s", plant.id, exc)
 
-                processed += len(rows)
+                processed += len(grouped)
                 await db.commit()
 
                 if processed % 2000 == 0:

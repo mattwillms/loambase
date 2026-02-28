@@ -8,6 +8,7 @@ class PlantSummary(BaseModel):
     id: int
     common_name: str
     scientific_name: Optional[str] = None
+    cultivar_name: Optional[str] = None
     plant_type: Optional[str] = None
     sun_requirement: Optional[str] = None
     water_needs: Optional[str] = None
@@ -23,6 +24,7 @@ class PlantRead(BaseModel):
     id: int
     common_name: str
     scientific_name: Optional[str] = None
+    cultivar_name: Optional[str] = None
     plant_type: Optional[str] = None
     hardiness_zones: Optional[list[str]] = None
     sun_requirement: Optional[str] = None

@@ -13,6 +13,7 @@ class Plant(Base):
     id: Mapped[int] = mapped_column(primary_key=True)
     common_name: Mapped[str] = mapped_column(String(200), index=True)
     scientific_name: Mapped[Optional[str]] = mapped_column(String(200), index=True)
+    cultivar_name: Mapped[Optional[str]] = mapped_column(String(200), index=True)
     plant_type: Mapped[Optional[str]] = mapped_column(
         Enum("annual", "perennial", "shrub", "tree", "herb", "vegetable", "fruit", "bulb", "other", "biennial",
              name="plant_type_enum")

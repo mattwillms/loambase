@@ -30,7 +30,7 @@ from app.services.permapeople import PermapeopleAPIError, fetch_plant_list
 from app.tasks.fetch_utils import (
     complete_run,
     fail_run,
-    find_plant_by_scientific_name,
+    find_plant_by_name,
     fmt,
     is_source_running,
     send_fetch_report,
@@ -171,10 +171,10 @@ async def _insert_new_species(
     slug = plant_data.get("slug")
     version = plant_data.get("version")
 
-    # Match to canonical plants table
+    # Match to canonical plants table by scientific_name + common_name
     plant = None
     if sci_name:
-        plant = await find_plant_by_scientific_name(db, sci_name)
+        plant = await find_plant_by_name(db, sci_name, common_name)
 
     if plant is None:
         plant = Plant(
