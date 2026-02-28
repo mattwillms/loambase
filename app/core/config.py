@@ -23,6 +23,8 @@ class Settings(BaseSettings):
 
     # External APIs
     PERENUAL_API_KEY: str = ""
+    PERMAPEOPLE_KEY_ID: str = ""
+    PERMAPEOPLE_KEY_SECRET: str = ""
     OPEN_METEO_BASE_URL: str = "https://api.open-meteo.com/v1"
     PHZMAPI_BASE_URL: str = "https://phzmapi.org"
 
@@ -39,6 +41,7 @@ class Settings(BaseSettings):
     EMAIL_TO: str = ""
 
     # App
+    TIMEZONE: str = "America/Chicago"
     ENVIRONMENT: str = "development"
     LOG_LEVEL: str = "INFO"
     ALLOWED_ORIGINS: str = "http://localhost:5173,http://localhost:5174"

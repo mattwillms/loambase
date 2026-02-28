@@ -45,9 +45,10 @@ class Plant(Base):
 
     # Source tracking
     source: Mapped[str] = mapped_column(
-        Enum("perenual", "trefle", "usda", "user", name="plant_source_enum"), default="user"
+        Enum("perenual", "trefle", "usda", "user", "permapeople", name="plant_source_enum"), default="user"
     )
     external_id: Mapped[Optional[str]] = mapped_column(String(100))  # ID in source system
+    data_sources: Mapped[Optional[list[str]]] = mapped_column(ARRAY(String))  # APIs that contributed data
     image_url: Mapped[Optional[str]] = mapped_column(Text)
     description: Mapped[Optional[str]] = mapped_column(Text)
 

@@ -17,7 +17,8 @@ from app.models.user import User
 from app.services.hardiness import get_hardiness_zone
 from app.services.weather import get_weather
 from app.tasks.notifications import send_daily_digest, send_frost_alerts, send_heat_alerts
-from app.tasks.seed_plants import seed_plants
+from app.tasks.fetch_perenual import fetch_perenual
+from app.tasks.fetch_permapeople import fetch_permapeople
 
 logger = logging.getLogger(__name__)
 
@@ -138,24 +139,16 @@ async def refresh_hardiness_zones(ctx: dict) -> None:
 # send_heat_alerts  — implemented (2026-02-25): runs daily at 06:00 UTC
 
 
-async def sync_plant_database(ctx: dict) -> None:
-    """Pull latest plant data from Perenual. Runs weekly."""
-    logger.info("sync_plant_database: starting")
-    # TODO: implement in Phase 1 seeding
-    logger.info("sync_plant_database: complete")
-
-
 # ── Worker settings ───────────────────────────────────────────────────────────
 
 
 class WorkerSettings:
     redis_settings = RedisSettings.from_dsn(settings.REDIS_URL)
-    functions = [sync_weather, refresh_hardiness_zones, sync_plant_database, seed_plants, send_daily_digest, send_frost_alerts, send_heat_alerts]
+    functions = [sync_weather, refresh_hardiness_zones, fetch_perenual, fetch_permapeople, send_daily_digest, send_frost_alerts, send_heat_alerts]
     cron_jobs = [
         cron(sync_weather, hour={0, 3, 6, 9, 12, 15, 18, 21}, minute=0),
         cron(refresh_hardiness_zones, hour=2, minute=30),
-        cron(sync_plant_database, weekday=0, hour=3, minute=0),  # Monday 3am
-        cron(seed_plants, hour=4, minute=0),  # Daily 4am
+        cron(fetch_perenual, hour=4, minute=0),  # Daily 4am
         cron(send_frost_alerts, hour=6, minute=0),   # Daily 6am UTC
         cron(send_heat_alerts, hour=6, minute=0),    # Daily 6am UTC
         cron(send_daily_digest, hour=7, minute=0),   # Daily 7am UTC

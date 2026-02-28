@@ -2,21 +2,29 @@ from datetime import date, datetime, timedelta
 from typing import Optional
 
 import redis.asyncio as aioredis
-from fastapi import APIRouter, Depends, HTTPException, Query
+from arq.connections import ArqRedis
+from fastapi import APIRouter, Body, Depends, HTTPException, Query
+from pydantic import BaseModel
 from sqlalchemy import func, select, text
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import settings
 from app.core.deps import AdminUser, get_db
 from app.core.security import hash_password
+from app.models.data_source_run import DataSourceRun
 from app.models.garden import Garden, Bed
 from app.models.logs import AuditLog, ApiRequestLog, NotificationLog, PipelineRun, SeederRun, WeatherCache
 from app.models.plant import Plant
 from app.models.schedule import Planting
 from app.models.user import User
 from app.schemas.user import AdminUserCreate, AdminUserRead, AdminUserUpdate
+from app.tasks.fetch_utils import is_source_running
 
 router = APIRouter(prefix="/admin", tags=["admin"])
+
+
+class FetchRequest(BaseModel):
+    force_full: bool = False
 
 _redis_client: aioredis.Redis | None = None
 
@@ -494,3 +502,98 @@ async def list_audit_log(
     ]
 
     return {"items": items, "total": total, "page": page, "per_page": per_page}
+
+
+# ── Fetch trigger endpoints ──────────────────────────────────────────────────
+
+
+async def _get_arq_redis() -> ArqRedis:
+    """Create an ArqRedis instance from the same Redis URL the worker uses."""
+    from arq.connections import RedisSettings, create_pool
+    redis_settings = RedisSettings.from_dsn(settings.REDIS_URL)
+    return await create_pool(redis_settings)
+
+
+@router.post("/fetch/permapeople")
+async def trigger_fetch_permapeople(
+    admin_user: AdminUser,
+    db: AsyncSession = Depends(get_db),
+    body: FetchRequest = FetchRequest(),
+) -> dict:
+    if await is_source_running(db, "permapeople"):
+        return {"status": "already_running"}
+
+    pool = await _get_arq_redis()
+    try:
+        await pool.enqueue_job("fetch_permapeople", triggered_by="mimus", force_full=body.force_full)
+    finally:
+        await pool.close()
+
+    return {"status": "queued", "message": "Permapeople fetch started", "force_full": body.force_full}
+
+
+@router.post("/fetch/perenual")
+async def trigger_fetch_perenual(
+    admin_user: AdminUser,
+) -> dict:
+    pool = await _get_arq_redis()
+    try:
+        await pool.enqueue_job("fetch_perenual")
+    finally:
+        await pool.close()
+
+    return {"status": "queued", "message": "Perenual fetch started"}
+
+
+@router.get("/fetch/status")
+async def get_fetch_status(
+    admin_user: AdminUser,
+    db: AsyncSession = Depends(get_db),
+) -> dict:
+    # Latest DataSourceRun for permapeople
+    pp_result = await db.execute(
+        select(DataSourceRun)
+        .where(DataSourceRun.source == "permapeople")
+        .order_by(DataSourceRun.started_at.desc())
+        .limit(1)
+    )
+    pp_run = pp_result.scalar_one_or_none()
+
+    permapeople_status = None
+    if pp_run:
+        permapeople_status = {
+            "status": pp_run.status,
+            "started_at": pp_run.started_at,
+            "finished_at": pp_run.finished_at,
+            "new_species": pp_run.new_species,
+            "updated": pp_run.updated,
+            "gap_filled": pp_run.gap_filled,
+            "unchanged": pp_run.unchanged,
+            "skipped": pp_run.skipped,
+            "errors": pp_run.errors,
+            "error_detail": pp_run.error_detail,
+            "triggered_by": pp_run.triggered_by,
+        }
+
+    # Latest SeederRun for perenual
+    pr_result = await db.execute(
+        select(SeederRun).order_by(SeederRun.started_at.desc()).limit(1)
+    )
+    pr_run = pr_result.scalar_one_or_none()
+
+    perenual_status = None
+    if pr_run:
+        perenual_status = {
+            "status": pr_run.status,
+            "started_at": pr_run.started_at,
+            "finished_at": pr_run.finished_at,
+            "records_synced": pr_run.records_synced,
+            "current_page": pr_run.current_page,
+            "total_pages": pr_run.total_pages,
+            "error_message": pr_run.error_message,
+        }
+
+    return {
+        "permapeople": permapeople_status,
+        "perenual": perenual_status,
+    }

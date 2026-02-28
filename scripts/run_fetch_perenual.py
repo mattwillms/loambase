@@ -1,12 +1,12 @@
 #!/usr/bin/env python3
 """
-One-off script to manually trigger the Perenual plant seeder.
+One-off script to manually trigger the Perenual plant fetcher.
 
 Usage (inside the API container):
-    python scripts/run_seeder.py
+    python scripts/run_fetch_perenual.py
 
 Or from the host:
-    docker exec loambase-loambase-api-1 python scripts/run_seeder.py
+    docker exec loambase-loambase-api-1 python scripts/run_fetch_perenual.py
 """
 import asyncio
 import logging
@@ -18,13 +18,13 @@ logging.basicConfig(
     stream=sys.stdout,
 )
 
-from app.tasks.seed_plants import seed_plants
+from app.tasks.fetch_perenual import fetch_perenual
 
 
 async def main() -> None:
-    print("Starting Perenual seeder...\n")
-    await seed_plants(ctx={})
-    print("\nSeeder finished.")
+    print("Starting Perenual fetcher...\n")
+    await fetch_perenual(ctx={})
+    print("\nFetcher finished.")
 
 
 if __name__ == "__main__":
