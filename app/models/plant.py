@@ -14,7 +14,7 @@ class Plant(Base):
     common_name: Mapped[str] = mapped_column(String(200), index=True)
     scientific_name: Mapped[Optional[str]] = mapped_column(String(200), index=True)
     plant_type: Mapped[Optional[str]] = mapped_column(
-        Enum("annual", "perennial", "shrub", "tree", "herb", "vegetable", "fruit", "bulb", "other",
+        Enum("annual", "perennial", "shrub", "tree", "herb", "vegetable", "fruit", "bulb", "other", "biennial",
              name="plant_type_enum")
     )
 
@@ -42,6 +42,57 @@ class Plant(Base):
     antagonist_plants: Mapped[Optional[list[str]]] = mapped_column(ARRAY(String))
     common_pests: Mapped[Optional[list[str]]] = mapped_column(ARRAY(String))
     common_diseases: Mapped[Optional[list[str]]] = mapped_column(ARRAY(String))
+
+    # Physical / Growing
+    height_inches: Mapped[Optional[float]] = mapped_column(Float)
+    width_inches: Mapped[Optional[float]] = mapped_column(Float)
+    soil_type: Mapped[Optional[str]] = mapped_column(Text)
+    soil_ph_min: Mapped[Optional[float]] = mapped_column(Float)
+    soil_ph_max: Mapped[Optional[float]] = mapped_column(Float)
+    growth_rate: Mapped[Optional[str]] = mapped_column(Text)
+    life_cycle: Mapped[Optional[str]] = mapped_column(Text)
+    drought_resistant: Mapped[Optional[bool]] = mapped_column(Boolean)
+    days_to_harvest: Mapped[Optional[int]] = mapped_column(Integer)
+
+    # Propagation / Germination
+    propagation_method: Mapped[Optional[str]] = mapped_column(Text)
+    germination_days_min: Mapped[Optional[int]] = mapped_column(Integer)
+    germination_days_max: Mapped[Optional[int]] = mapped_column(Integer)
+    germination_temp_min_f: Mapped[Optional[float]] = mapped_column(Float)
+    germination_temp_max_f: Mapped[Optional[float]] = mapped_column(Float)
+    sow_outdoors: Mapped[Optional[str]] = mapped_column(Text)
+    sow_indoors: Mapped[Optional[str]] = mapped_column(Text)
+    start_indoors_weeks: Mapped[Optional[int]] = mapped_column(Integer)
+    start_outdoors_weeks: Mapped[Optional[int]] = mapped_column(Integer)
+    plant_transplant: Mapped[Optional[str]] = mapped_column(Text)
+    plant_cuttings: Mapped[Optional[str]] = mapped_column(Text)
+    plant_division: Mapped[Optional[str]] = mapped_column(Text)
+
+    # Geographic / Taxonomy
+    native_to: Mapped[Optional[str]] = mapped_column(Text)
+    habitat: Mapped[Optional[str]] = mapped_column(Text)
+    family: Mapped[Optional[str]] = mapped_column(Text)
+    genus: Mapped[Optional[str]] = mapped_column(Text)
+
+    # Edible / Medicinal
+    edible: Mapped[Optional[bool]] = mapped_column(Boolean)
+    edible_parts: Mapped[Optional[str]] = mapped_column(Text)
+    edible_uses: Mapped[Optional[str]] = mapped_column(Text)
+    medicinal: Mapped[Optional[str]] = mapped_column(Text)
+    medicinal_parts: Mapped[Optional[str]] = mapped_column(Text)
+    utility: Mapped[Optional[str]] = mapped_column(Text)
+    warning: Mapped[Optional[str]] = mapped_column(Text)
+
+    # Other
+    pollination: Mapped[Optional[str]] = mapped_column(Text)
+    nitrogen_fixing: Mapped[Optional[bool]] = mapped_column(Boolean)
+    root_type: Mapped[Optional[str]] = mapped_column(Text)
+    root_depth: Mapped[Optional[str]] = mapped_column(Text)
+
+    # Links
+    wikipedia_url: Mapped[Optional[str]] = mapped_column(Text)
+    pfaf_url: Mapped[Optional[str]] = mapped_column(Text)
+    powo_url: Mapped[Optional[str]] = mapped_column(Text)
 
     # Source tracking
     source: Mapped[str] = mapped_column(

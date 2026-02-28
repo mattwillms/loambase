@@ -17,6 +17,7 @@ from app.models.user import User
 from app.services.hardiness import get_hardiness_zone
 from app.services.weather import get_weather
 from app.tasks.notifications import send_daily_digest, send_frost_alerts, send_heat_alerts
+from app.tasks.enrich_plants import enrich_plants
 from app.tasks.fetch_perenual import fetch_perenual
 from app.tasks.fetch_permapeople import fetch_permapeople
 
@@ -144,7 +145,7 @@ async def refresh_hardiness_zones(ctx: dict) -> None:
 
 class WorkerSettings:
     redis_settings = RedisSettings.from_dsn(settings.REDIS_URL)
-    functions = [sync_weather, refresh_hardiness_zones, fetch_perenual, fetch_permapeople, send_daily_digest, send_frost_alerts, send_heat_alerts]
+    functions = [sync_weather, refresh_hardiness_zones, fetch_perenual, fetch_permapeople, enrich_plants, send_daily_digest, send_frost_alerts, send_heat_alerts]
     cron_jobs = [
         cron(sync_weather, hour={0, 3, 6, 9, 12, 15, 18, 21}, minute=0),
         cron(refresh_hardiness_zones, hour=2, minute=30),

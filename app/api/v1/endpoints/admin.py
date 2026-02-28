@@ -547,6 +547,23 @@ async def trigger_fetch_perenual(
     return {"status": "queued", "message": "Perenual fetch started"}
 
 
+@router.post("/enrich")
+async def trigger_enrichment(
+    admin_user: AdminUser,
+    db: AsyncSession = Depends(get_db),
+) -> dict:
+    if await is_source_running(db, "enrichment"):
+        return {"status": "already_running"}
+
+    pool = await _get_arq_redis()
+    try:
+        await pool.enqueue_job("enrich_plants", triggered_by="mimus")
+    finally:
+        await pool.close()
+
+    return {"status": "queued", "message": "Enrichment started"}
+
+
 @router.get("/fetch/status")
 async def get_fetch_status(
     admin_user: AdminUser,
@@ -612,6 +629,32 @@ async def get_fetch_status(
 
     plants_total = await db.scalar(select(func.count()).select_from(Plant))
 
+    # Latest DataSourceRun for enrichment
+    enrich_result = await db.execute(
+        select(DataSourceRun)
+        .where(DataSourceRun.source == "enrichment")
+        .order_by(DataSourceRun.started_at.desc())
+        .limit(1)
+    )
+    enrich_run = enrich_result.scalar_one_or_none()
+    enrich_latest = None
+    if enrich_run:
+        enrich_latest = {
+            "id": enrich_run.id,
+            "status": enrich_run.status,
+            "started_at": enrich_run.started_at,
+            "finished_at": enrich_run.finished_at,
+            "new_species": enrich_run.new_species,
+            "updated": enrich_run.updated,
+            "gap_filled": enrich_run.gap_filled,
+            "unchanged": enrich_run.unchanged,
+            "skipped": enrich_run.skipped,
+            "errors": enrich_run.errors,
+            "error_detail": enrich_run.error_detail,
+            "triggered_by": enrich_run.triggered_by,
+        }
+    enrich_running = await is_source_running(db, "enrichment")
+
     return {
         "permapeople": {
             "latest_run": pp_latest,
@@ -624,6 +667,10 @@ async def get_fetch_status(
             "total_records": pr_total or 0,
             "matched_to_plants": pr_matched or 0,
             "is_running": pr_running,
+        },
+        "enrichment": {
+            "latest_run": enrich_latest,
+            "is_running": enrich_running,
         },
         "plants_total": plants_total or 0,
     }
@@ -640,17 +687,23 @@ async def get_fetch_history(
     """Paginated run history for data source fetchers."""
     rows: list[dict] = []
 
-    # Gather DataSourceRun entries (permapeople)
-    if source is None or source == "permapeople":
+    # Gather DataSourceRun entries (permapeople + enrichment)
+    dsr_sources = []
+    if source is None:
+        dsr_sources = ["permapeople", "enrichment"]
+    elif source in ("permapeople", "enrichment"):
+        dsr_sources = [source]
+
+    if dsr_sources:
         dsr_result = await db.execute(
             select(DataSourceRun)
-            .where(DataSourceRun.source == "permapeople")
+            .where(DataSourceRun.source.in_(dsr_sources))
             .order_by(DataSourceRun.started_at.desc())
         )
         for run in dsr_result.scalars().all():
             rows.append({
                 "id": run.id,
-                "source": "permapeople",
+                "source": run.source,
                 "status": run.status,
                 "started_at": run.started_at.isoformat() if run.started_at else None,
                 "finished_at": run.finished_at.isoformat() if run.finished_at else None,
