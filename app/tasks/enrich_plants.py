@@ -164,22 +164,63 @@ def normalize_plant_type(raw: str) -> Optional[str]:
     return PLANT_TYPE_MAP.get(raw.lower().strip())
 
 
+SUBZONES = ["a", "b"]
+
+
+def _parse_zone_endpoint(s: str) -> tuple[int, Optional[str]]:
+    """Parse '9b' -> (9, 'b'), '7' -> (7, None)."""
+    s = s.strip().lower()
+    if s and s[-1] in ("a", "b"):
+        return int(s[:-1]), s[-1]
+    return int(s), None
+
+
+def _expand_zone_range(
+    start_num: int, start_sub: Optional[str],
+    end_num: int, end_sub: Optional[str],
+) -> list[str]:
+    has_subzones = start_sub is not None or end_sub is not None
+    if not has_subzones:
+        return [str(z) for z in range(start_num, end_num + 1)]
+    # Normalize: bare start = 'a', bare end = 'b'
+    start_sub = start_sub or "a"
+    end_sub = end_sub or "b"
+    result: list[str] = []
+    for z in range(start_num, end_num + 1):
+        for sub in SUBZONES:
+            if z == start_num and sub < start_sub:
+                continue
+            if z == end_num and sub > end_sub:
+                continue
+            result.append(f"{z}{sub}")
+    return result
+
+
 def normalize_hardiness_zones(raw: str) -> Optional[list[str]]:
-    """Parse '2-11' or '7a-9b' into list of zone strings."""
-    raw = raw.strip()
+    """Parse '2-11', '7a-9b', '9b to 11' into list of zone strings with subzone support."""
+    # Clean input: strip extra quotes, trim
+    raw = raw.strip().strip('"').strip("'").strip()
     if not raw:
         return None
-    # Strip sub-zone letters (a/b)
-    cleaned = re.sub(r"[a-bA-B]", "", raw)
-    m = re.match(r"^(\d+)\s*-\s*(\d+)$", cleaned)
+    # Normalize separators
+    raw = raw.replace(" to ", "-").replace(" - ", "-")
+
+    # Try range: "7-9", "7a-9b", "9b-11"
+    m = re.match(r"^(\d+[ab]?)\s*-\s*(\d+[ab]?)$", raw, re.IGNORECASE)
     if m:
-        lo, hi = int(m.group(1)), int(m.group(2))
-        if 0 <= lo <= hi <= 13:
-            return [str(z) for z in range(lo, hi + 1)]
-    # Single zone
-    m = re.match(r"^(\d+)$", cleaned)
+        try:
+            s_num, s_sub = _parse_zone_endpoint(m.group(1))
+            e_num, e_sub = _parse_zone_endpoint(m.group(2))
+            if 0 <= s_num <= e_num <= 13:
+                return _expand_zone_range(s_num, s_sub, e_num, e_sub)
+        except (ValueError, TypeError):
+            return None
+
+    # Single zone: "7", "9b"
+    m = re.match(r"^(\d+[ab]?)$", raw, re.IGNORECASE)
     if m:
-        return [m.group(1)]
+        return [m.group(1).lower()]
+
     return None
 
 
@@ -197,34 +238,31 @@ def normalize_days(raw: str) -> Optional[int]:
     return None
 
 
-def normalize_height_to_inches(raw: str) -> Optional[float]:
-    """Convert meters to inches. '1.0' -> 39.37."""
-    raw = raw.strip()
-    try:
-        meters = float(raw)
-        return round(meters * 39.37, 1)
-    except (ValueError, TypeError):
-        return None
-
-
-_SPACING_RE = re.compile(
-    r"^([\d.]+)\s*(?:-\s*([\d.]+))?\s*(cm|m|inches|inch|in|\'|feet|ft)?",
+_MEASUREMENT_RE = re.compile(
+    r"^([\d.]+)\s*(?:-\s*([\d.]+))?\s*(cm|m|inches|inch|in|\"|\'|feet|ft)?",
     re.IGNORECASE,
 )
 
 
-def normalize_spacing_to_inches(raw: str) -> Optional[float]:
-    """Parse mixed-unit spacing to inches. '30cm' -> 11.81, '12-18 inches' -> 15."""
-    raw = raw.strip().replace("'", "'")
+def parse_measurement_to_inches(raw: str, default_unit: str = "m") -> Optional[float]:
+    """Parse a measurement string to inches.
+
+    Handles: '1.5m', '0.7-1.5m', '3ft', '30cm', '12-18 inches', '30x30cm',
+    pure numeric (uses default_unit: 'm' for height/width, 'cm' for spacing/depth).
+    """
+    raw = raw.strip().replace("\u2019", "'").replace("\u2018", "'")
     # Handle "30x30cm" — take first dimension
     if "x" in raw.lower():
         raw = raw.lower().split("x")[0].strip()
 
-    m = _SPACING_RE.match(raw)
+    m = _MEASUREMENT_RE.match(raw)
     if not m:
         return None
 
-    val1 = float(m.group(1))
+    try:
+        val1 = float(m.group(1))
+    except ValueError:
+        return None
     val2 = float(m.group(2)) if m.group(2) else val1
     avg = (val1 + val2) / 2
     unit = (m.group(3) or "").lower().rstrip(".")
@@ -232,26 +270,53 @@ def normalize_spacing_to_inches(raw: str) -> Optional[float]:
     if unit in ("cm",):
         return round(avg / 2.54, 1)
     elif unit in ("m",):
-        return round(avg * 39.37, 1)
-    elif unit in ("inches", "inch", "in"):
+        return round(avg * 39.3701, 1)
+    elif unit in ("inches", "inch", "in", '"'):
         return round(avg, 1)
     elif unit in ("'", "feet", "ft"):
         return round(avg * 12, 1)
     else:
-        # No unit — if value > 10 assume cm, else assume meters
-        if avg > 10:
+        # No explicit unit — apply default
+        if default_unit == "cm":
+            if avg > 10:
+                return round(avg / 2.54, 1)
+            # Small bare number with cm default — probably cm
             return round(avg / 2.54, 1)
-        return round(avg * 39.37, 1)
+        else:
+            # default_unit == "m"
+            return round(avg * 39.3701, 1)
+
+
+def normalize_height_to_inches(raw: str) -> Optional[float]:
+    """Convert height to inches. '1.5m' -> 59.1, '3ft' -> 36."""
+    return parse_measurement_to_inches(raw, default_unit="m")
+
+
+def normalize_spacing_to_inches(raw: str) -> Optional[float]:
+    """Parse mixed-unit spacing to inches. '30cm' -> 11.8, '12-18 inches' -> 15."""
+    return parse_measurement_to_inches(raw, default_unit="cm")
 
 
 def normalize_depth_to_inches(raw: str) -> Optional[float]:
-    """Parse depth values to inches. '2.5 cm' -> 0.98."""
-    return normalize_spacing_to_inches(raw)
+    """Parse depth values to inches. '2.5 cm' -> 1.0."""
+    return parse_measurement_to_inches(raw, default_unit="cm")
 
 
 def normalize_soil_ph(raw: str) -> Optional[tuple[float, float]]:
-    """Parse '6.0-6.8' into (min, max) tuple."""
+    """Parse '6.0-6.8' into (min, max) tuple. Handles en-dash, em-dash, > and <."""
     raw = raw.strip()
+    # Normalize dashes: en-dash (U+2013), em-dash (U+2014) → hyphen
+    raw = raw.replace("\u2013", "-").replace("\u2014", "-")
+    # Handle inequality: ">6.5" or "< 6"
+    m = re.match(r"^[>≥]\s*([\d.]+)", raw)
+    if m:
+        val = float(m.group(1))
+        return (val, val)
+    m = re.match(r"^[<≤]\s*([\d.]+)", raw)
+    if m:
+        val = float(m.group(1))
+        return (val, val)
+    # Range: "6.0-6.8"
     m = re.match(r"^([\d.]+)\s*-\s*([\d.]+)", raw)
     if m:
         try:
