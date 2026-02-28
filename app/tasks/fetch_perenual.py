@@ -334,12 +334,14 @@ async def fetch_perenual(ctx: dict, retry_count: int = 0) -> None:
                     page_data = await fetch_species_list(page)
                 except RateLimitError as exc:
                     logger.warning("fetch_perenual: rate limited on list fetch (page=%d): %s", page, exc)
-                    run.status = "failed"
-                    run.error_message = (
-                        f"Quota not reset at {_CRON_HOUR:02d}:00 UTC (page {page})"
-                        if run.requests_used == 0
-                        else f"Rate limited on page {page}: {exc}"
-                    )
+                    if run.requests_used == 0:
+                        # Quota not yet reset — actual scheduling issue, mark failed
+                        run.status = "failed"
+                        run.error_message = f"Quota not reset at {_CRON_HOUR:02d}:00 UTC (page {page})"
+                    else:
+                        # Hit limit mid-run — normal budget exhaustion
+                        run.status = "budget_reached"
+                        run.error_message = f"Rate limited on page {page}: {exc}"
                     run.finished_at = datetime.now(timezone.utc)
                     await db.commit()
 
@@ -433,7 +435,7 @@ async def fetch_perenual(ctx: dict, retry_count: int = 0) -> None:
                 )
                 await _notify_complete(db, run)
             else:
-                run.status = "failed"
+                run.status = "budget_reached"
                 run.error_message = f"Daily budget reached ({_REQUEST_BUDGET} requests)"
                 run.finished_at = datetime.now(timezone.utc)
                 await db.commit()

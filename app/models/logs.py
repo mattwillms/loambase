@@ -15,7 +15,7 @@ class SeederRun(Base):
 
     id: Mapped[int] = mapped_column(primary_key=True)
     status: Mapped[str] = mapped_column(
-        Enum("running", "complete", "failed", name="seeder_status_enum")
+        Enum("running", "complete", "failed", "budget_reached", name="seeder_status_enum")
     )
     current_page: Mapped[int] = mapped_column(Integer, default=0)
     total_pages: Mapped[Optional[int]] = mapped_column(Integer)
