@@ -574,6 +574,7 @@ async def get_fetch_status(
             "unchanged": pp_run.unchanged,
             "skipped": pp_run.skipped,
             "errors": pp_run.errors,
+            "error_detail": pp_run.error_detail,
             "triggered_by": pp_run.triggered_by,
         }
 
@@ -599,6 +600,7 @@ async def get_fetch_status(
             "current_page": pr_run.current_page,
             "records_synced": pr_run.records_synced,
             "requests_used": pr_run.requests_used,
+            "error_detail": pr_run.error_message,
         }
 
     pr_total = await db.scalar(select(func.count()).select_from(PerenualPlant))
@@ -658,6 +660,7 @@ async def get_fetch_history(
                 "unchanged": run.unchanged,
                 "skipped": run.skipped,
                 "errors": run.errors,
+                "error_detail": run.error_detail,
                 "triggered_by": run.triggered_by,
             })
 
@@ -683,6 +686,7 @@ async def get_fetch_history(
                 "unchanged": None,
                 "skipped": None,
                 "errors": None,
+                "error_detail": run.error_message,
                 "triggered_by": "cron",
                 "current_page": run.current_page,
                 "records_synced": run.records_synced,
