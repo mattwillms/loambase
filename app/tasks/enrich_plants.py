@@ -14,6 +14,7 @@ import logging
 import re
 import traceback
 from datetime import datetime, timezone
+from decimal import Decimal
 from typing import Any, Optional
 
 from sqlalchemy import func, select
@@ -268,23 +269,20 @@ def parse_measurement_to_inches(raw: str, default_unit: str = "m") -> Optional[f
     unit = (m.group(3) or "").lower().rstrip(".")
 
     if unit in ("cm",):
-        return round(avg / 2.54, 1)
+        return round(avg / 2.54, 2)
     elif unit in ("m",):
-        return round(avg * 39.3701, 1)
+        return round(avg * 39.3701, 2)
     elif unit in ("inches", "inch", "in", '"'):
-        return round(avg, 1)
+        return round(avg, 2)
     elif unit in ("'", "feet", "ft"):
-        return round(avg * 12, 1)
+        return round(avg * 12, 2)
     else:
         # No explicit unit — apply default
         if default_unit == "cm":
-            if avg > 10:
-                return round(avg / 2.54, 1)
-            # Small bare number with cm default — probably cm
-            return round(avg / 2.54, 1)
+            return round(avg / 2.54, 2)
         else:
             # default_unit == "m"
-            return round(avg * 39.3701, 1)
+            return round(avg * 39.3701, 2)
 
 
 def normalize_height_to_inches(raw: str) -> Optional[float]:
@@ -310,22 +308,22 @@ def normalize_soil_ph(raw: str) -> Optional[tuple[float, float]]:
     # Handle inequality: ">6.5" or "< 6"
     m = re.match(r"^[>≥]\s*([\d.]+)", raw)
     if m:
-        val = float(m.group(1))
+        val = round(float(m.group(1)), 2)
         return (val, val)
     m = re.match(r"^[<≤]\s*([\d.]+)", raw)
     if m:
-        val = float(m.group(1))
+        val = round(float(m.group(1)), 2)
         return (val, val)
     # Range: "6.0-6.8"
     m = re.match(r"^([\d.]+)\s*-\s*([\d.]+)", raw)
     if m:
         try:
-            return (float(m.group(1)), float(m.group(2)))
+            return (round(float(m.group(1)), 2), round(float(m.group(2)), 2))
         except ValueError:
             return None
     # Single value
     try:
-        val = float(raw)
+        val = round(float(raw), 2)
         return (val, val)
     except (ValueError, TypeError):
         return None
@@ -368,20 +366,20 @@ def normalize_germination_temp(raw: str) -> Optional[tuple[float, float]]:
     if f_match:
         lo = float(f_match.group(1))
         hi = float(f_match.group(2)) if f_match.group(2) else lo
-        return (round(lo, 1), round(hi, 1))
+        return (round(lo, 2), round(hi, 2))
 
     # Fall back to °C and convert
     c_match = _TEMP_C_RE.search(raw)
     if c_match:
         lo_c = float(c_match.group(1))
         hi_c = float(c_match.group(2)) if c_match.group(2) else lo_c
-        return (round(lo_c * 9 / 5 + 32, 1), round(hi_c * 9 / 5 + 32, 1))
+        return (round(lo_c * 9 / 5 + 32, 2), round(hi_c * 9 / 5 + 32, 2))
 
     # Try raw range of numbers (assume °C)
     m = re.match(r"^([\d.]+)\s*-\s*([\d.]+)", raw)
     if m:
         lo_c, hi_c = float(m.group(1)), float(m.group(2))
-        return (round(lo_c * 9 / 5 + 32, 1), round(hi_c * 9 / 5 + 32, 1))
+        return (round(lo_c * 9 / 5 + 32, 2), round(hi_c * 9 / 5 + 32, 2))
 
     return None
 
@@ -465,6 +463,21 @@ NORMALIZERS: dict[str, Any] = {
     "common_pests": normalize_list,
     "common_diseases": normalize_list,
 }
+
+
+# ── Comparison helper ─────────────────────────────────────────────────────────
+
+def values_equal(resolved: Any, current: Any) -> bool:
+    """Compare resolved value to current DB value with float tolerance."""
+    if resolved is None and current is None:
+        return True
+    if resolved is None or current is None:
+        return False
+    if isinstance(resolved, float) and isinstance(current, (float, int, Decimal)):
+        return abs(resolved - float(current)) < 0.01
+    if isinstance(resolved, list) and isinstance(current, list):
+        return resolved == list(current)
+    return resolved == current
 
 
 # ── Strategy implementations ─────────────────────────────────────────────────
@@ -729,7 +742,7 @@ async def enrich_plants(ctx: dict, triggered_by: str = "manual") -> None:
 
                             # Write if different from current value
                             current = getattr(plant, field_name)
-                            if resolved is not None and resolved != current:
+                            if resolved is not None and not values_equal(resolved, current):
                                 setattr(plant, field_name, resolved)
                                 changed = True
                                 stats["fields_filled"] += 1
@@ -737,9 +750,11 @@ async def enrich_plants(ctx: dict, triggered_by: str = "manual") -> None:
                                 for src in normalized:
                                     sources_used.add(src)
 
-                        # Update data_sources
-                        if sources_used != set(plant.data_sources or []):
-                            plant.data_sources = sorted(sources_used)
+                        # Update data_sources only when content actually differs
+                        new_sources = sorted(sources_used)
+                        if set(new_sources) != set(plant.data_sources or []):
+                            plant.data_sources = new_sources
+                            changed = True
 
                         if changed:
                             stats["enriched"] += 1
