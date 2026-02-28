@@ -239,6 +239,7 @@ async def fetch_permapeople(ctx: dict, triggered_by: str = "manual", force_full:
             "matched_existing": 0,
         }
         changes: list[str] = []
+        error_messages: list[str] = []
 
         try:
             # ── Pass 1: New species discovery ─────────────────────────
@@ -284,8 +285,10 @@ async def fetch_permapeople(ctx: dict, triggered_by: str = "manual", force_full:
                         try:
                             await _insert_new_species(db, p, parsed, stats, changes)
                         except Exception as exc:
+                            sci_name = p.get("scientific_name") or "unknown"
                             logger.warning("fetch_permapeople: error inserting permapeople_id=%d: %s", pid, exc)
                             stats["errors"] += 1
+                            error_messages.append(f"Plant {pid} ({sci_name}): {exc}")
                             await db.rollback()
 
                         last_id = pid
@@ -341,8 +344,10 @@ async def fetch_permapeople(ctx: dict, triggered_by: str = "manual", force_full:
                             try:
                                 await _insert_new_species(db, p, parsed, stats, changes)
                             except Exception as exc:
+                                sci_name = p.get("scientific_name") or "unknown"
                                 logger.warning("fetch_permapeople: error inserting permapeople_id=%d: %s", pid, exc)
                                 stats["errors"] += 1
+                                error_messages.append(f"Plant {pid} ({sci_name}): {exc}")
                                 await db.rollback()
                         else:
                             new_version = p.get("version")
@@ -395,6 +400,8 @@ async def fetch_permapeople(ctx: dict, triggered_by: str = "manual", force_full:
                     await asyncio.sleep(1.0)
 
             # ── Finish ────────────────────────────────────────────────
+            if error_messages:
+                run.error_detail = "\n".join(error_messages[:50])
             await complete_run(db, run, stats)
             await db.commit()
 

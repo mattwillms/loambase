@@ -318,6 +318,7 @@ async def fetch_perenual(ctx: dict, retry_count: int = 0) -> None:
         await db.commit()  # persist immediately so rollbacks don't lose the run record
 
         logger.info("fetch_perenual: starting (run_id=%d, start_page=%d)", run.id, start_page)
+        error_messages: list[str] = []
 
         try:
             page = start_page
@@ -374,39 +375,45 @@ async def fetch_perenual(ctx: dict, retry_count: int = 0) -> None:
                     if await _perenual_plant_exists(db, species_id):
                         continue
 
-                    common_name = species.get("common_name") or "Unknown"
-                    sci_name = _scientific_name(species)
-                    image_url = _image_url(species)
+                    try:
+                        common_name = species.get("common_name") or "Unknown"
+                        sci_name = _scientific_name(species)
+                        image_url = _image_url(species)
 
-                    # Match to canonical plants table by scientific_name
-                    plant = None
-                    if sci_name:
-                        plant = await find_plant_by_scientific_name(db, sci_name)
+                        # Match to canonical plants table by scientific_name
+                        plant = None
+                        if sci_name:
+                            plant = await find_plant_by_scientific_name(db, sci_name)
 
-                    # Create a new plants row if no match
-                    if plant is None:
-                        plant = Plant(
+                        # Create a new plants row if no match
+                        if plant is None:
+                            plant = Plant(
+                                common_name=common_name,
+                                scientific_name=sci_name,
+                                image_url=image_url,
+                                source="perenual",
+                                external_id=str(species_id),
+                                is_user_defined=False,
+                                data_sources=["perenual"],
+                            )
+                            db.add(plant)
+                            await db.flush()  # get plant.id for the FK
+
+                        # Insert PerenualPlant source row
+                        pp = PerenualPlant(
+                            perenual_id=species_id,
+                            plant_id=plant.id,
                             common_name=common_name,
                             scientific_name=sci_name,
                             image_url=image_url,
-                            source="perenual",
-                            external_id=str(species_id),
-                            is_user_defined=False,
-                            data_sources=["perenual"],
                         )
-                        db.add(plant)
-                        await db.flush()  # get plant.id for the FK
-
-                    # Insert PerenualPlant source row
-                    pp = PerenualPlant(
-                        perenual_id=species_id,
-                        plant_id=plant.id,
-                        common_name=common_name,
-                        scientific_name=sci_name,
-                        image_url=image_url,
-                    )
-                    db.add(pp)
-                    page_synced += 1
+                        db.add(pp)
+                        page_synced += 1
+                    except Exception as exc:
+                        sci_name = _scientific_name(species) or "unknown"
+                        logger.warning("fetch_perenual: error on species %d: %s", species_id, exc)
+                        error_messages.append(f"Species {species_id} ({sci_name}): {exc}")
+                        await db.rollback()
 
                 run.current_page = page
                 run.records_synced += page_synced
@@ -425,6 +432,9 @@ async def fetch_perenual(ctx: dict, retry_count: int = 0) -> None:
                 page += 1
 
             # ── Finalise run ───────────────────────────────────────────────
+            if error_messages:
+                run.error_message = "\n".join(error_messages[:50])
+
             if catalog_complete:
                 run.status = "complete"
                 run.finished_at = datetime.now(timezone.utc)
