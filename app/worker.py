@@ -5,7 +5,7 @@ Run with: python -m app.worker
 import logging
 from datetime import datetime, timezone
 
-from arq import cron
+from arq import cron, func
 from arq.connections import RedisSettings
 from sqlalchemy import select
 
@@ -145,7 +145,16 @@ async def refresh_hardiness_zones(ctx: dict) -> None:
 
 class WorkerSettings:
     redis_settings = RedisSettings.from_dsn(settings.REDIS_URL)
-    functions = [sync_weather, refresh_hardiness_zones, fetch_perenual, fetch_permapeople, enrich_plants, send_daily_digest, send_frost_alerts, send_heat_alerts]
+    functions = [
+        sync_weather,
+        refresh_hardiness_zones,
+        func(fetch_perenual, timeout=600),         # 10 minutes
+        func(fetch_permapeople, timeout=1800),     # 30 minutes
+        func(enrich_plants, timeout=600),           # 10 minutes
+        send_daily_digest,
+        send_frost_alerts,
+        send_heat_alerts,
+    ]
     cron_jobs = [
         cron(sync_weather, hour={0, 3, 6, 9, 12, 15, 18, 21}, minute=0),
         cron(refresh_hardiness_zones, hour=2, minute=30),
