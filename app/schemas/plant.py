@@ -19,6 +19,7 @@ class PlantSummary(BaseModel):
     edible: Optional[bool] = None
     family: Optional[str] = None
     life_cycle: Optional[str] = None
+    is_favorite: bool = False
 
     model_config = {"from_attributes": True}
 
@@ -101,6 +102,8 @@ class PlantRead(BaseModel):
     wikipedia_url: Optional[str] = None
     pfaf_url: Optional[str] = None
     powo_url: Optional[str] = None
+
+    is_favorite: bool = False
 
     model_config = {"from_attributes": True}
 

@@ -5,7 +5,7 @@ import redis.asyncio as aioredis
 from arq.connections import ArqRedis
 from fastapi import APIRouter, Body, Depends, HTTPException, Query
 from pydantic import BaseModel
-from sqlalchemy import func, select, text
+from sqlalchemy import case, exists, func, select, text
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import settings
@@ -19,6 +19,19 @@ from app.models.schedule import Planting
 from app.models.source_perenual import PerenualPlant
 from app.models.source_permapeople import PermapeoplePlant
 from app.models.user import User
+from app.models.enrichment import EnrichmentRule
+from app.schemas.admin_plant import (
+    AdminPlantListResponse,
+    AdminPlantSummary,
+    EnrichmentRuleRead,
+    EnrichmentRuleUpdate,
+    EnrichmentRulesResponse,
+    FieldCoverageItem,
+    PerenualSourceData,
+    PermapeopleSourceData,
+    PlantCoverageResponse,
+    PlantSourcesResponse,
+)
 from app.schemas.user import AdminUserCreate, AdminUserRead, AdminUserUpdate
 from app.tasks.fetch_utils import is_source_running
 
@@ -759,3 +772,202 @@ async def get_fetch_history(
         "page": page,
         "per_page": per_page,
     }
+
+
+# ── Plant Browser ────────────────────────────────────────────────
+
+_FIELD_COUNT_COLUMNS = [
+    Plant.height_inches, Plant.width_inches, Plant.soil_type, Plant.soil_ph_min,
+    Plant.life_cycle, Plant.propagation_method, Plant.germination_days_min,
+    Plant.native_to, Plant.edible, Plant.edible_parts, Plant.medicinal,
+    Plant.wikipedia_url, Plant.description, Plant.companion_plants,
+]
+
+
+@router.get("/plants/browse", response_model=AdminPlantListResponse)
+async def admin_browse_plants(
+    admin_user: AdminUser,
+    db: AsyncSession = Depends(get_db),
+    name: str | None = Query(None),
+    source: str | None = Query(None),
+    both_sources: bool | None = Query(None),
+    sort_by: str = Query("name_asc"),
+    page: int = Query(1, ge=1),
+    per_page: int = Query(50, ge=1, le=200),
+):
+    perenual_exists = exists(
+        select(PerenualPlant.id).where(PerenualPlant.plant_id == Plant.id)
+    )
+    permapeople_exists = exists(
+        select(PermapeoplePlant.id).where(PermapeoplePlant.plant_id == Plant.id)
+    )
+
+    field_count_expr = sum(
+        case((col.isnot(None), 1), else_=0) for col in _FIELD_COUNT_COLUMNS
+    ).label("field_count")
+
+    query = select(
+        Plant,
+        perenual_exists.label("has_perenual"),
+        permapeople_exists.label("has_permapeople"),
+        field_count_expr,
+    )
+
+    if name:
+        query = query.where(Plant.common_name.ilike(f"%{name}%"))
+    if source:
+        query = query.where(Plant.source == source)
+    if both_sources is True:
+        query = query.where(perenual_exists).where(permapeople_exists)
+
+    sort_map = {
+        "name_asc": Plant.common_name.asc(),
+        "name_desc": Plant.common_name.desc(),
+        "coverage_asc": field_count_expr.asc(),
+        "coverage_desc": field_count_expr.desc(),
+    }
+    order = sort_map.get(sort_by, Plant.common_name.asc())
+
+    count_q = select(func.count()).select_from(query.subquery())
+    total = await db.scalar(count_q) or 0
+
+    offset = (page - 1) * per_page
+    result = await db.execute(
+        query.order_by(order).offset(offset).limit(per_page)
+    )
+    rows = result.all()
+
+    items = []
+    for plant, has_per, has_perm, fc in rows:
+        items.append(AdminPlantSummary(
+            id=plant.id,
+            common_name=plant.common_name,
+            scientific_name=plant.scientific_name,
+            cultivar_name=plant.cultivar_name,
+            plant_type=plant.plant_type,
+            source=plant.source,
+            data_sources=plant.data_sources,
+            has_perenual=has_per,
+            has_permapeople=has_perm,
+            field_count=fc,
+            image_url=plant.image_url,
+        ))
+
+    return AdminPlantListResponse(items=items, total=total, page=page, per_page=per_page)
+
+
+@router.get("/plants/{plant_id}/sources", response_model=PlantSourcesResponse)
+async def admin_plant_sources(
+    plant_id: int,
+    admin_user: AdminUser,
+    db: AsyncSession = Depends(get_db),
+):
+    result = await db.execute(select(Plant).where(Plant.id == plant_id))
+    plant = result.scalar_one_or_none()
+    if not plant:
+        raise HTTPException(status_code=404, detail="Plant not found")
+
+    perenual_result = await db.execute(
+        select(PerenualPlant).where(PerenualPlant.plant_id == plant_id)
+    )
+    perenual_row = perenual_result.scalar_one_or_none()
+
+    permapeople_result = await db.execute(
+        select(PermapeoplePlant).where(PermapeoplePlant.plant_id == plant_id)
+    )
+    permapeople_row = permapeople_result.scalar_one_or_none()
+
+    return PlantSourcesResponse(
+        plant_id=plant.id,
+        common_name=plant.common_name,
+        scientific_name=plant.scientific_name,
+        perenual=PerenualSourceData.model_validate(perenual_row) if perenual_row else None,
+        permapeople=PermapeopleSourceData.model_validate(permapeople_row) if permapeople_row else None,
+    )
+
+
+# ── Coverage ─────────────────────────────────────────────────────
+
+_COVERAGE_FIELDS = [
+    "common_name", "scientific_name", "image_url", "description", "plant_type",
+    "water_needs", "sun_requirement", "hardiness_zones", "days_to_maturity",
+    "spacing_inches", "planting_depth_inches", "common_pests", "common_diseases",
+    "height_inches", "width_inches", "soil_type", "soil_ph_min", "soil_ph_max",
+    "growth_rate", "life_cycle", "drought_resistant", "days_to_harvest",
+    "propagation_method", "germination_days_min", "germination_days_max",
+    "germination_temp_min_f", "germination_temp_max_f", "sow_outdoors",
+    "sow_indoors", "start_indoors_weeks", "start_outdoors_weeks",
+    "plant_transplant", "plant_cuttings", "plant_division", "native_to",
+    "habitat", "family", "genus", "edible", "edible_parts", "edible_uses",
+    "medicinal", "medicinal_parts", "utility", "warning", "pollination",
+    "nitrogen_fixing", "root_type", "root_depth", "wikipedia_url", "pfaf_url",
+    "powo_url",
+]
+
+
+@router.get("/plants/coverage", response_model=PlantCoverageResponse)
+async def get_plant_coverage(
+    admin_user: AdminUser,
+    db: AsyncSession = Depends(get_db),
+):
+    cols = {
+        name: func.count(getattr(Plant, name)).label(name)
+        for name in _COVERAGE_FIELDS
+    }
+    result = await db.execute(
+        select(func.count().label("total"), *cols.values()).select_from(Plant)
+    )
+    row = result.one()
+    total = row.total
+
+    fields = []
+    for name in _COVERAGE_FIELDS:
+        populated = getattr(row, name)
+        pct = round(populated / total * 100, 1) if total > 0 else 0.0
+        fields.append(FieldCoverageItem(
+            field_name=name, populated=populated, total=total, pct=pct,
+        ))
+
+    fields.sort(key=lambda f: f.pct, reverse=True)
+
+    return PlantCoverageResponse(total_plants=total, fields=fields)
+
+
+# ── Enrichment Rules ─────────────────────────────────────────────
+
+
+@router.get("/enrichment/rules", response_model=EnrichmentRulesResponse)
+async def list_enrichment_rules(
+    admin_user: AdminUser,
+    db: AsyncSession = Depends(get_db),
+):
+    result = await db.execute(
+        select(EnrichmentRule).order_by(EnrichmentRule.field_name.asc())
+    )
+    rules = result.scalars().all()
+    return EnrichmentRulesResponse(
+        items=[EnrichmentRuleRead.model_validate(r) for r in rules]
+    )
+
+
+@router.patch("/enrichment/rules/{field_name}", response_model=EnrichmentRuleRead)
+async def update_enrichment_rule(
+    field_name: str,
+    data: EnrichmentRuleUpdate,
+    admin_user: AdminUser,
+    db: AsyncSession = Depends(get_db),
+):
+    result = await db.execute(
+        select(EnrichmentRule).where(EnrichmentRule.field_name == field_name)
+    )
+    rule = result.scalar_one_or_none()
+    if not rule:
+        raise HTTPException(status_code=404, detail="Enrichment rule not found")
+
+    for field, value in data.model_dump(exclude_unset=True).items():
+        setattr(rule, field, value)
+    rule.updated_by = admin_user.id
+
+    await db.commit()
+    await db.refresh(rule)
+    return EnrichmentRuleRead.model_validate(rule)

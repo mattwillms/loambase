@@ -7,6 +7,7 @@ from app.models.source_perenual import PerenualPlant
 from app.models.source_permapeople import PermapeoplePlant
 from app.models.enrichment import EnrichmentRule
 from app.models.data_source_run import DataSourceRun
+from app.models.favorite import UserPlantFavorite
 
 __all__ = [
     "User",
@@ -29,4 +30,5 @@ __all__ = [
     "PermapeoplePlant",
     "EnrichmentRule",
     "DataSourceRun",
+    "UserPlantFavorite",
 ]
