@@ -194,6 +194,100 @@ async def refresh_hardiness_zones(ctx: dict) -> None:
 # send_heat_alerts  — implemented (2026-02-25): runs daily at 06:00 UTC
 
 
+# ── Dynamic cron scheduling ──────────────────────────────────────────────────
+
+CRON_DEFAULTS = {
+    'sync_weather':            {'interval_hours': 3, 'minute': 0, 'enabled': True},
+    'sync_admin_weather':      {'interval_hours': 3, 'minute': 0, 'enabled': True},
+    'cache_images':            {'hour': 2,  'minute': 0,  'enabled': True},
+    'fetch_permapeople':       {'hour': 3,  'minute': 0,  'enabled': True},
+    'fetch_perenual':          {'hour': 4,  'minute': 0,  'enabled': True},
+    'refresh_hardiness_zones': {'hour': 2,  'minute': 30, 'enabled': True},
+    'send_frost_alerts':       {'hour': 6,  'minute': 0,  'enabled': True},
+    'send_heat_alerts':        {'hour': 6,  'minute': 0,  'enabled': True},
+    'send_daily_digest':       {'hour': 7,  'minute': 0,  'enabled': True},
+}
+
+CRON_FUNCTIONS = {
+    'sync_weather': sync_weather,
+    'sync_admin_weather': sync_admin_weather,
+    'cache_images': cache_images,
+    'fetch_permapeople': fetch_permapeople,
+    'fetch_perenual': fetch_perenual,
+    'refresh_hardiness_zones': refresh_hardiness_zones,
+    'send_frost_alerts': send_frost_alerts,
+    'send_heat_alerts': send_heat_alerts,
+    'send_daily_digest': send_daily_digest,
+}
+
+
+async def sync_cron_jobs_with_db() -> None:
+    """Seed CRON_DEFAULTS into cron_jobs table — insert-only, never overwrites existing rows."""
+    from app.models.cron_job import CronJob
+
+    async with AsyncSessionLocal() as db:
+        result = await db.execute(select(CronJob.name))
+        existing = {row[0] for row in result.all()}
+
+        for name, defaults in CRON_DEFAULTS.items():
+            if name not in existing:
+                db.add(CronJob(
+                    name=name,
+                    enabled=defaults.get('enabled', True),
+                    hour=defaults.get('hour'),
+                    minute=defaults.get('minute', 0),
+                    interval_hours=defaults.get('interval_hours'),
+                ))
+                logger.info("sync_cron_jobs: seeded %s", name)
+
+        await db.commit()
+    logger.info("sync_cron_jobs: done (%d defaults, %d already existed)", len(CRON_DEFAULTS), len(existing))
+
+
+async def rebuild_cron_schedule() -> None:
+    """Read cron_jobs table and build WorkerSettings.cron_jobs dynamically."""
+    from app.models.cron_job import CronJob
+
+    jobs = []
+    async with AsyncSessionLocal() as db:
+        result = await db.execute(select(CronJob))
+        for row in result.scalars().all():
+            if not row.enabled:
+                logger.info("rebuild_cron: %s — disabled, skipping", row.name)
+                continue
+
+            fn = CRON_FUNCTIONS.get(row.name)
+            if fn is None:
+                logger.warning("rebuild_cron: %s — no function found, skipping", row.name)
+                continue
+
+            minute = row.minute if row.minute is not None else 0
+
+            if row.interval_hours:
+                hours = set(range(0, 24, row.interval_hours))
+                jobs.append(cron(fn, hour=hours, minute=minute))
+                logger.info("rebuild_cron: %s — every %dh at :%02d", row.name, row.interval_hours, minute)
+            elif row.hour is not None:
+                jobs.append(cron(fn, hour={row.hour}, minute=minute))
+                logger.info("rebuild_cron: %s — daily at %02d:%02d", row.name, row.hour, minute)
+            else:
+                logger.warning("rebuild_cron: %s — no hour or interval, skipping", row.name)
+
+    WorkerSettings.cron_jobs = jobs
+    logger.info("rebuild_cron: %d cron jobs configured", len(jobs))
+
+
+async def startup(ctx: dict) -> None:
+    """Worker on_startup hook — re-sync defaults in case new jobs were added to CRON_DEFAULTS."""
+    await sync_cron_jobs_with_db()
+
+
+async def _init_schedule() -> None:
+    """Pre-startup: seed DB defaults and build cron schedule before ARQ reads WorkerSettings."""
+    await sync_cron_jobs_with_db()
+    await rebuild_cron_schedule()
+
+
 # ── Worker settings ───────────────────────────────────────────────────────────
 
 
@@ -211,16 +305,8 @@ class WorkerSettings:
         send_frost_alerts,
         send_heat_alerts,
     ]
-    cron_jobs = [
-        cron(sync_weather, hour={0, 3, 6, 9, 12, 15, 18, 21}, minute=0),
-        cron(sync_admin_weather, hour={0, 3, 6, 9, 12, 15, 18, 21}, minute=0),
-        cron(refresh_hardiness_zones, hour=2, minute=30),
-        cron(fetch_perenual, hour=4, minute=0),  # Daily 4am
-        cron(send_frost_alerts, hour=6, minute=0),   # Daily 6am UTC
-        cron(send_heat_alerts, hour=6, minute=0),    # Daily 6am UTC
-        cron(send_daily_digest, hour=7, minute=0),   # Daily 7am UTC
-    ]
-    on_startup = None
+    cron_jobs: list = []  # populated by rebuild_cron_schedule() before run_worker()
+    on_startup = startup
     on_shutdown = None
 
 
@@ -228,4 +314,5 @@ if __name__ == "__main__":
     import asyncio
     from arq import run_worker
 
+    asyncio.run(_init_schedule())
     run_worker(WorkerSettings)

@@ -19,6 +19,7 @@ from app.models.schedule import Planting
 from app.models.source_perenual import PerenualPlant
 from app.models.source_permapeople import PermapeoplePlant
 from app.models.user import User
+from app.models.cron_job import CronJob
 from app.models.enrichment import EnrichmentRule
 from app.schemas.admin_plant import (
     AdminPlantListResponse,
@@ -1176,3 +1177,84 @@ async def update_enrichment_rule(
         details={"field_name": field_name, "changes": {k: {"old": old_values[k], "new": v} for k, v in changes.items()}},
     )
     return EnrichmentRuleRead.model_validate(rule)
+
+
+# ── Cron Job Scheduling ─────────────────────────────────────────
+
+
+class CronJobUpdate(BaseModel):
+    enabled: Optional[bool] = None
+    hour: Optional[int] = None
+    minute: Optional[int] = None
+    interval_hours: Optional[int] = None
+
+
+@router.get("/cron/jobs")
+async def get_cron_jobs(
+    admin_user: AdminUser,
+    db: AsyncSession = Depends(get_db),
+) -> dict:
+    """Return all cron job schedule rows."""
+    result = await db.execute(select(CronJob).order_by(CronJob.name))
+    rows = result.scalars().all()
+    return {
+        "items": [
+            {
+                "id": r.id,
+                "name": r.name,
+                "enabled": r.enabled,
+                "hour": r.hour,
+                "minute": r.minute,
+                "interval_hours": r.interval_hours,
+                "updated_at": r.updated_at.isoformat() if r.updated_at else None,
+            }
+            for r in rows
+        ]
+    }
+
+
+@router.patch("/cron/jobs/{name}")
+async def update_cron_job(
+    name: str,
+    body: CronJobUpdate,
+    admin_user: AdminUser,
+    db: AsyncSession = Depends(get_db),
+) -> dict:
+    """Update a cron job's schedule or enabled state."""
+    result = await db.execute(select(CronJob).where(CronJob.name == name))
+    job = result.scalar_one_or_none()
+    if not job:
+        raise HTTPException(404, f"Cron job '{name}' not found")
+
+    changes = body.model_dump(exclude_unset=True)
+    for field, value in changes.items():
+        setattr(job, field, value)
+    job.updated_at = datetime.now()
+
+    await db.commit()
+    await db.refresh(job)
+    return {
+        "id": job.id,
+        "name": job.name,
+        "enabled": job.enabled,
+        "hour": job.hour,
+        "minute": job.minute,
+        "interval_hours": job.interval_hours,
+        "updated_at": job.updated_at.isoformat() if job.updated_at else None,
+    }
+
+
+@router.post("/worker/restart")
+async def restart_worker(admin_user: AdminUser) -> dict:
+    """Restart the loambase-worker container to apply schedule changes."""
+    import subprocess
+
+    try:
+        subprocess.run(
+            ["docker", "restart", "loambase-loambase-worker-1"],
+            timeout=10,
+            check=False,
+        )
+    except subprocess.TimeoutExpired:
+        pass  # restart issued, container may take time
+    return {"status": "restarting"}

@@ -8,6 +8,7 @@ from app.models.source_permapeople import PermapeoplePlant
 from app.models.enrichment import EnrichmentRule
 from app.models.data_source_run import DataSourceRun
 from app.models.favorite import UserPlantFavorite
+from app.models.cron_job import CronJob
 
 __all__ = [
     "User",
@@ -31,4 +32,5 @@ __all__ = [
     "EnrichmentRule",
     "DataSourceRun",
     "UserPlantFavorite",
+    "CronJob",
 ]
