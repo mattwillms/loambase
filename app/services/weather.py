@@ -99,6 +99,7 @@ def _parse_raw(raw: dict) -> dict:
         "uv_index": cur.get("uv_index"),
         "soil_temp_f": cur.get("soil_temperature_0cm"),
         "frost_warning": bool(low_temp_f is not None and low_temp_f < 32.0),
+        "heat_warning": bool(high_temp_f is not None and high_temp_f >= 90.0),
         "fetched_at": datetime.now(timezone.utc).isoformat(),
     }
 
@@ -206,6 +207,7 @@ async def _upsert_daily_record(db: AsyncSession, data: dict) -> None:
     record.uv_index = data.get("uv_index")
     record.soil_temp_f = data.get("soil_temp_f")
     record.frost_warning = data.get("frost_warning", False)
+    record.heat_warning = data.get("heat_warning", False)
     record.fetched_at = datetime.now(timezone.utc)
 
     await db.commit()

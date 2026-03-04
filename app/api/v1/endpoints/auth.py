@@ -1,6 +1,6 @@
 from datetime import timezone
 
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, Request, status
 from fastapi.security import OAuth2PasswordRequestForm
 from jose import JWTError
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -36,6 +36,7 @@ async def register(data: UserCreate, db: AsyncSession = Depends(get_db)):
 
 @router.post("/login", response_model=TokenResponse)
 async def login(
+    request: Request,
     form_data: OAuth2PasswordRequestForm = Depends(),
     db: AsyncSession = Depends(get_db),
 ):
@@ -49,6 +50,14 @@ async def login(
         raise HTTPException(status_code=400, detail="Account disabled")
 
     await record_login(db, user)
+
+    if user.role == "admin":
+        from app.services.audit import write_audit_log
+        await write_audit_log(
+            db, action="admin_login", entity_type="user", entity_id=user.id,
+            user_id=user.id, ip=request.client.host if request.client else None,
+            details={"email": user.email},
+        )
 
     return TokenResponse(
         access_token=create_access_token(str(user.id), user.role),

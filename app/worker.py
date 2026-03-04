@@ -17,6 +17,7 @@ from app.models.user import User
 from app.services.hardiness import get_hardiness_zone
 from app.services.weather import get_weather
 from app.tasks.notifications import send_daily_digest, send_frost_alerts, send_heat_alerts
+from app.tasks.cache_images import cache_images
 from app.tasks.enrich_plants import enrich_plants
 from app.tasks.fetch_perenual import fetch_perenual
 from app.tasks.fetch_permapeople import fetch_permapeople
@@ -77,6 +78,59 @@ async def sync_weather(ctx: dict) -> None:
             raise
 
     logger.info("sync_weather: complete — %d garden locations updated", records)
+
+
+async def sync_admin_weather(ctx: dict) -> None:
+    """Poll Open-Meteo for admin users with coordinates and update WeatherCache. Runs every 3 hours."""
+    logger.info("sync_admin_weather: starting")
+    started_at = datetime.now(timezone.utc)
+    records = 0
+
+    async with AsyncSessionLocal() as db:
+        pipeline = PipelineRun(
+            pipeline_name="admin_weather_sync",
+            status="running",
+            started_at=started_at,
+        )
+        db.add(pipeline)
+        await db.commit()
+        await db.refresh(pipeline)
+
+        try:
+            result = await db.execute(
+                select(User).where(
+                    User.role == "admin",
+                    User.latitude.isnot(None),
+                    User.longitude.isnot(None),
+                )
+            )
+            admins = result.scalars().all()
+
+            for user in admins:
+                try:
+                    await get_weather(user.latitude, user.longitude, ctx["redis"], db)
+                    records += 1
+                except Exception as exc:
+                    logger.warning("sync_admin_weather: failed for user %d: %s", user.id, exc)
+
+            finished_at = datetime.now(timezone.utc)
+            pipeline.status = "success"
+            pipeline.finished_at = finished_at
+            pipeline.duration_ms = int((finished_at - started_at).total_seconds() * 1000)
+            pipeline.records_processed = records
+            await db.commit()
+
+        except Exception as exc:
+            logger.exception("sync_admin_weather: unexpected error")
+            finished_at = datetime.now(timezone.utc)
+            pipeline.status = "failed"
+            pipeline.finished_at = finished_at
+            pipeline.duration_ms = int((finished_at - started_at).total_seconds() * 1000)
+            pipeline.error_message = str(exc)
+            await db.commit()
+            raise
+
+    logger.info("sync_admin_weather: complete — %d admin locations updated", records)
 
 
 async def refresh_hardiness_zones(ctx: dict) -> None:
@@ -147,16 +201,19 @@ class WorkerSettings:
     redis_settings = RedisSettings.from_dsn(settings.REDIS_URL)
     functions = [
         sync_weather,
+        sync_admin_weather,
         refresh_hardiness_zones,
         func(fetch_perenual, timeout=600),         # 10 minutes
         func(fetch_permapeople, timeout=1800),     # 30 minutes
         func(enrich_plants, timeout=600),           # 10 minutes
+        func(cache_images, timeout=3600),            # 1 hour
         send_daily_digest,
         send_frost_alerts,
         send_heat_alerts,
     ]
     cron_jobs = [
         cron(sync_weather, hour={0, 3, 6, 9, 12, 15, 18, 21}, minute=0),
+        cron(sync_admin_weather, hour={0, 3, 6, 9, 12, 15, 18, 21}, minute=0),
         cron(refresh_hardiness_zones, hour=2, minute=30),
         cron(fetch_perenual, hour=4, minute=0),  # Daily 4am
         cron(send_frost_alerts, hour=6, minute=0),   # Daily 6am UTC

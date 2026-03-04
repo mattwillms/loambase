@@ -3,7 +3,7 @@ from typing import Optional
 
 import redis.asyncio as aioredis
 from arq.connections import ArqRedis
-from fastapi import APIRouter, Body, Depends, HTTPException, Query
+from fastapi import APIRouter, Body, Depends, HTTPException, Query, Request
 from pydantic import BaseModel
 from sqlalchemy import case, exists, func, select, text
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -33,6 +33,7 @@ from app.schemas.admin_plant import (
     PlantSourcesResponse,
 )
 from app.schemas.user import AdminUserCreate, AdminUserRead, AdminUserUpdate
+from app.services.audit import write_audit_log
 from app.tasks.fetch_utils import is_source_running
 
 router = APIRouter(prefix="/admin", tags=["admin"])
@@ -156,6 +157,7 @@ async def list_users(
 async def create_user_admin(
     data: AdminUserCreate,
     admin_user: AdminUser,
+    request: Request,
     db: AsyncSession = Depends(get_db),
 ):
     existing = await db.scalar(select(User).where(User.email == data.email))
@@ -177,6 +179,11 @@ async def create_user_admin(
     db.add(user)
     await db.commit()
     await db.refresh(user)
+    await write_audit_log(
+        db, action="user_created", entity_type="user", entity_id=user.id,
+        user_id=admin_user.id, ip=request.client.host if request.client else None,
+        details={"email": user.email, "role": user.role},
+    )
     return user
 
 
@@ -197,18 +204,37 @@ async def update_user_admin(
     user_id: int,
     data: AdminUserUpdate,
     admin_user: AdminUser,
+    request: Request,
     db: AsyncSession = Depends(get_db),
 ):
     user = await db.scalar(select(User).where(User.id == user_id))
     if not user:
         raise HTTPException(status_code=404, detail="User not found")
-    for field, value in data.model_dump(exclude_unset=True).items():
+    changes = data.model_dump(exclude_unset=True)
+    old_is_active = user.is_active
+    for field, value in changes.items():
         if field == "password":
             setattr(user, "hashed_password", hash_password(value))
         else:
             setattr(user, field, value)
     await db.commit()
     await db.refresh(user)
+    ip = request.client.host if request.client else None
+    # Log activation/deactivation separately
+    if "is_active" in changes and changes["is_active"] != old_is_active:
+        action = "user_reactivated" if changes["is_active"] else "user_deactivated"
+        await write_audit_log(
+            db, action=action, entity_type="user", entity_id=user_id,
+            user_id=admin_user.id, ip=ip,
+        )
+    # Log the general update
+    logged_changes = {k: v for k, v in changes.items() if k != "password"}
+    if "password" in changes:
+        logged_changes["password"] = "***"
+    await write_audit_log(
+        db, action="user_updated", entity_type="user", entity_id=user_id,
+        user_id=admin_user.id, ip=ip, details=logged_changes,
+    )
     return user
 
 
@@ -317,36 +343,81 @@ async def list_notification_log(
     return {"items": items, "total": total, "page": page, "per_page": per_page}
 
 
+_QUARTER_RANGES = {
+    1: (1, 1, 3, 31),
+    2: (4, 1, 6, 30),
+    3: (7, 1, 9, 30),
+    4: (10, 1, 12, 31),
+}
+
+
+def _quarter_date_range(quarter: int, year: int) -> tuple[date, date]:
+    """Return (start, end) for a calendar quarter."""
+    sm, sd, em, ed = _QUARTER_RANGES[quarter]
+    return date(year, sm, sd), date(year, em, ed)
+
+
 @router.get("/analytics/weather")
 async def get_weather_analytics(
     admin_user: AdminUser,
     db: AsyncSession = Depends(get_db),
     days: int = Query(30, ge=1, le=365),
+    year: Optional[int] = Query(None, ge=2020, le=2100),
+    quarter: Optional[int] = Query(None, ge=1, le=4),
+    quarter_year: Optional[int] = Query(None, ge=2020, le=2100),
 ) -> dict:
     if admin_user.latitude is None or admin_user.longitude is None:
         raise HTTPException(status_code=422, detail="Admin user has no location set")
 
-    since = date.today() - timedelta(days=days)
+    coord_filter = [
+        func.abs(WeatherCache.latitude - admin_user.latitude) < 0.5,
+        func.abs(WeatherCache.longitude - admin_user.longitude) < 0.5,
+    ]
+
+    # Date filtering: quarter > year > days
+    if quarter is not None and quarter_year is not None and quarter in _QUARTER_RANGES:
+        q_start, q_end = _quarter_date_range(quarter, quarter_year)
+        date_filter = [WeatherCache.date >= q_start, WeatherCache.date <= q_end]
+    elif year is not None:
+        date_filter = [WeatherCache.date >= date(year, 1, 1), WeatherCache.date <= date(year, 12, 31)]
+    else:
+        date_filter = [WeatherCache.date >= date.today() - timedelta(days=days)]
 
     result = await db.execute(
-        select(WeatherCache).where(
-            WeatherCache.date >= since,
-            func.abs(WeatherCache.latitude - admin_user.latitude) < 0.01,
-            func.abs(WeatherCache.longitude - admin_user.longitude) < 0.01,
-        ).order_by(WeatherCache.date.asc())
+        select(WeatherCache).where(*date_filter, *coord_filter).order_by(WeatherCache.date.asc())
     )
-    records = result.scalars().all()
+    all_records = result.scalars().all()
+
+    # Deduplicate by date — keep the row closest to admin coordinates per day.
+    by_date: dict[date, list] = {}
+    for r in all_records:
+        by_date.setdefault(r.date, []).append(r)
+
+    def _pick_best(rows: list, lat: float, lon: float):
+        def sort_key(r):
+            dist = abs(r.latitude - lat) + abs(r.longitude - lon)
+            populated = sum(1 for v in (r.high_temp_f, r.low_temp_f, r.precip_inches, r.humidity_pct, r.wind_mph) if v is not None)
+            return (dist, -populated)
+        return min(rows, key=sort_key)
+
+    records = [
+        _pick_best(rows, admin_user.latitude, admin_user.longitude)
+        for rows in by_date.values()
+    ]
+    records.sort(key=lambda r: r.date)
 
     high_temps = [r.high_temp_f for r in records if r.high_temp_f is not None]
     low_temps = [r.low_temp_f for r in records if r.low_temp_f is not None]
     precip_vals = [r.precip_inches for r in records if r.precip_inches is not None]
     frost_days = sum(1 for r in records if r.frost_warning)
+    heat_days = sum(1 for r in records if r.heat_warning)
 
     summary = {
         "avg_high_f": round(sum(high_temps) / len(high_temps), 1) if high_temps else None,
         "avg_low_f": round(sum(low_temps) / len(low_temps), 1) if low_temps else None,
         "total_precip_inches": round(sum(precip_vals), 2) if precip_vals else None,
         "frost_days": frost_days,
+        "heat_days": heat_days,
     }
 
     items = [
@@ -357,11 +428,58 @@ async def get_weather_analytics(
             "precip_inches": r.precip_inches,
             "humidity_pct": r.humidity_pct,
             "frost_warning": r.frost_warning,
+            "heat_warning": r.heat_warning or False,
         }
         for r in records
     ]
 
-    return {"summary": summary, "records": items}
+    # Available years
+    years_result = await db.execute(
+        select(func.distinct(func.extract("year", WeatherCache.date)))
+        .where(*coord_filter)
+        .order_by(func.extract("year", WeatherCache.date).asc())
+    )
+    available_years = [int(row[0]) for row in years_result.all()]
+
+    # Available quarters
+    today = date.today()
+    cur_quarter = (today.month - 1) // 3 + 1
+    _quarter_labels = {1: "Q1 (Jan–Mar)", 2: "Q2 (Apr–Jun)", 3: "Q3 (Jul–Sep)", 4: "Q4 (Oct–Dec)"}
+    available_quarters: list[dict] = []
+
+    for y in available_years:
+        for q in range(1, 5):
+            q_start, q_end = _quarter_date_range(q, y)
+            if q_start > today:
+                continue  # future quarter
+            is_current = (y == today.year and q == cur_quarter)
+            if is_current:
+                available_quarters.append({
+                    "label": f"{y} {_quarter_labels[q]}",
+                    "quarter": q,
+                    "quarter_year": y,
+                })
+            else:
+                count = await db.scalar(
+                    select(func.count()).select_from(WeatherCache).where(
+                        WeatherCache.date >= q_start, WeatherCache.date <= q_end, *coord_filter
+                    )
+                )
+                if count and count > 0:
+                    available_quarters.append({
+                        "label": f"{y} {_quarter_labels[q]}",
+                        "quarter": q,
+                        "quarter_year": y,
+                    })
+
+    available_quarters.reverse()  # most recent first
+
+    return {
+        "summary": summary,
+        "records": items,
+        "available_years": available_years,
+        "available_quarters": available_quarters,
+    }
 
 
 @router.get("/analytics/gardens")
@@ -532,6 +650,7 @@ async def _get_arq_redis() -> ArqRedis:
 @router.post("/fetch/permapeople")
 async def trigger_fetch_permapeople(
     admin_user: AdminUser,
+    request: Request,
     db: AsyncSession = Depends(get_db),
     body: FetchRequest = FetchRequest(),
 ) -> dict:
@@ -544,12 +663,19 @@ async def trigger_fetch_permapeople(
     finally:
         await pool.close()
 
+    await write_audit_log(
+        db, action="pipeline_triggered", entity_type="pipeline",
+        user_id=admin_user.id, ip=request.client.host if request.client else None,
+        details={"pipeline": "permapeople", "triggered_by": "mimus", "force_full": body.force_full},
+    )
     return {"status": "queued", "message": "Permapeople fetch started", "force_full": body.force_full}
 
 
 @router.post("/fetch/perenual")
 async def trigger_fetch_perenual(
     admin_user: AdminUser,
+    request: Request,
+    db: AsyncSession = Depends(get_db),
 ) -> dict:
     pool = await _get_arq_redis()
     try:
@@ -557,12 +683,41 @@ async def trigger_fetch_perenual(
     finally:
         await pool.close()
 
+    await write_audit_log(
+        db, action="pipeline_triggered", entity_type="pipeline",
+        user_id=admin_user.id, ip=request.client.host if request.client else None,
+        details={"pipeline": "perenual", "triggered_by": "mimus"},
+    )
     return {"status": "queued", "message": "Perenual fetch started"}
+
+
+@router.post("/fetch/image-cache")
+async def trigger_image_cache(
+    admin_user: AdminUser,
+    request: Request,
+    db: AsyncSession = Depends(get_db),
+) -> dict:
+    if await is_source_running(db, "image_cache"):
+        return {"status": "already_running"}
+
+    pool = await _get_arq_redis()
+    try:
+        await pool.enqueue_job("cache_images", triggered_by="mimus")
+    finally:
+        await pool.close()
+
+    await write_audit_log(
+        db, action="pipeline_triggered", entity_type="pipeline",
+        user_id=admin_user.id, ip=request.client.host if request.client else None,
+        details={"pipeline": "image_cache", "triggered_by": "mimus"},
+    )
+    return {"status": "queued", "message": "Image cache started"}
 
 
 @router.post("/enrich")
 async def trigger_enrichment(
     admin_user: AdminUser,
+    request: Request,
     db: AsyncSession = Depends(get_db),
 ) -> dict:
     if await is_source_running(db, "enrichment"):
@@ -574,6 +729,11 @@ async def trigger_enrichment(
     finally:
         await pool.close()
 
+    await write_audit_log(
+        db, action="pipeline_triggered", entity_type="pipeline",
+        user_id=admin_user.id, ip=request.client.host if request.client else None,
+        details={"pipeline": "enrichment", "triggered_by": "mimus"},
+    )
     return {"status": "queued", "message": "Enrichment started"}
 
 
@@ -668,6 +828,35 @@ async def get_fetch_status(
         }
     enrich_running = await is_source_running(db, "enrichment")
 
+    # Latest DataSourceRun for image_cache
+    ic_result = await db.execute(
+        select(DataSourceRun)
+        .where(DataSourceRun.source == "image_cache")
+        .order_by(DataSourceRun.started_at.desc())
+        .limit(1)
+    )
+    ic_run = ic_result.scalar_one_or_none()
+    ic_latest = None
+    if ic_run:
+        ic_latest = {
+            "id": ic_run.id,
+            "status": ic_run.status,
+            "started_at": ic_run.started_at,
+            "finished_at": ic_run.finished_at,
+            "new_species": ic_run.new_species,
+            "updated": ic_run.updated,
+            "skipped": ic_run.skipped,
+            "errors": ic_run.errors,
+            "error_detail": ic_run.error_detail,
+            "triggered_by": ic_run.triggered_by,
+        }
+    ic_running = await is_source_running(db, "image_cache")
+
+    # Image cache stats
+    plants_with_image = await db.scalar(
+        select(func.count()).select_from(Plant).where(Plant.image_url.isnot(None))
+    ) or 0
+
     return {
         "permapeople": {
             "latest_run": pp_latest,
@@ -685,6 +874,11 @@ async def get_fetch_status(
             "latest_run": enrich_latest,
             "is_running": enrich_running,
         },
+        "image_cache": {
+            "latest_run": ic_latest,
+            "is_running": ic_running,
+            "plants_with_image": plants_with_image,
+        },
         "plants_total": plants_total or 0,
     }
 
@@ -700,11 +894,11 @@ async def get_fetch_history(
     """Paginated run history for data source fetchers."""
     rows: list[dict] = []
 
-    # Gather DataSourceRun entries (permapeople + enrichment)
+    # Gather DataSourceRun entries (permapeople + enrichment + image_cache)
     dsr_sources = []
     if source is None:
-        dsr_sources = ["permapeople", "enrichment"]
-    elif source in ("permapeople", "enrichment"):
+        dsr_sources = ["permapeople", "enrichment", "image_cache"]
+    elif source in ("permapeople", "enrichment", "image_cache"):
         dsr_sources = [source]
 
     if dsr_sources:
@@ -955,6 +1149,7 @@ async def update_enrichment_rule(
     field_name: str,
     data: EnrichmentRuleUpdate,
     admin_user: AdminUser,
+    request: Request,
     db: AsyncSession = Depends(get_db),
 ):
     result = await db.execute(
@@ -964,10 +1159,18 @@ async def update_enrichment_rule(
     if not rule:
         raise HTTPException(status_code=404, detail="Enrichment rule not found")
 
-    for field, value in data.model_dump(exclude_unset=True).items():
+    changes = data.model_dump(exclude_unset=True)
+    old_values = {k: getattr(rule, k) for k in changes}
+    for field, value in changes.items():
         setattr(rule, field, value)
     rule.updated_by = admin_user.id
 
     await db.commit()
     await db.refresh(rule)
+    await write_audit_log(
+        db, action="enrichment_rule_updated", entity_type="enrichment_rule",
+        entity_id=rule.id, user_id=admin_user.id,
+        ip=request.client.host if request.client else None,
+        details={"field_name": field_name, "changes": {k: {"old": old_values[k], "new": v} for k, v in changes.items()}},
+    )
     return EnrichmentRuleRead.model_validate(rule)

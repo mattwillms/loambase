@@ -45,6 +45,7 @@ class WeatherCache(Base):
     uv_index: Mapped[Optional[float]] = mapped_column(Float)
     soil_temp_f: Mapped[Optional[float]] = mapped_column(Float)
     frost_warning: Mapped[bool] = mapped_column(Boolean, default=False)
+    heat_warning: Mapped[Optional[bool]] = mapped_column(Boolean)
 
     fetched_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), default=lambda: datetime.now(timezone.utc)
@@ -79,9 +80,7 @@ class AuditLog(Base):
 
     id: Mapped[int] = mapped_column(primary_key=True)
     user_id: Mapped[Optional[int]] = mapped_column(ForeignKey("users.id", ondelete="SET NULL"), index=True)
-    action: Mapped[str] = mapped_column(
-        Enum("create", "update", "delete", "login", "export", name="audit_action_enum")
-    )
+    action: Mapped[str] = mapped_column(String(50))
     entity_type: Mapped[Optional[str]] = mapped_column(String(50))
     entity_id: Mapped[Optional[int]] = mapped_column(Integer)
     timestamp: Mapped[datetime] = mapped_column(
