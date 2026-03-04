@@ -277,13 +277,26 @@ async def rebuild_cron_schedule() -> None:
     logger.info("rebuild_cron: %d cron jobs configured", len(jobs))
 
 
+def _build_default_cron_jobs() -> list:
+    """Build cron job list from CRON_DEFAULTS — used as initial schedule before DB is available."""
+    jobs = []
+    for name, defaults in CRON_DEFAULTS.items():
+        if not defaults.get('enabled', True):
+            continue
+        fn = CRON_FUNCTIONS.get(name)
+        if fn is None:
+            continue
+        minute = defaults.get('minute', 0)
+        if 'interval_hours' in defaults:
+            hours = set(range(0, 24, defaults['interval_hours']))
+            jobs.append(cron(fn, hour=hours, minute=minute))
+        elif 'hour' in defaults:
+            jobs.append(cron(fn, hour={defaults['hour']}, minute=minute))
+    return jobs
+
+
 async def startup(ctx: dict) -> None:
-    """Worker on_startup hook — re-sync defaults in case new jobs were added to CRON_DEFAULTS."""
-    await sync_cron_jobs_with_db()
-
-
-async def _init_schedule() -> None:
-    """Pre-startup: seed DB defaults and build cron schedule before ARQ reads WorkerSettings."""
+    """Worker on_startup hook — sync DB defaults, then rebuild schedule from DB."""
     await sync_cron_jobs_with_db()
     await rebuild_cron_schedule()
 
@@ -305,7 +318,7 @@ class WorkerSettings:
         send_frost_alerts,
         send_heat_alerts,
     ]
-    cron_jobs: list = []  # populated by rebuild_cron_schedule() before run_worker()
+    cron_jobs: list = _build_default_cron_jobs()
     on_startup = startup
     on_shutdown = None
 
@@ -314,5 +327,5 @@ if __name__ == "__main__":
     import asyncio
     from arq import run_worker
 
-    asyncio.run(_init_schedule())
+    asyncio.set_event_loop(asyncio.new_event_loop())
     run_worker(WorkerSettings)
