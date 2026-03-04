@@ -5,16 +5,17 @@ Strategy
 --------
 Query all plants that have an image_url and are linked to a perenual_plants
 source row, but do not yet have a cached WebP file on disk. For each plant,
-hit the Perenual species detail endpoint to get a fresh image URL, update
-plants.image_url, download the image, convert to WebP at quality 80, and
-save as /app/image_cache/plants/{plant_id}.webp.
+attempt to download directly from the existing plants.image_url. If the
+download fails (non-200, timeout, DNS error), hit the Perenual species detail
+endpoint to refresh the URL and retry once. This means most plants with valid
+URLs are cached without touching the API quota.
 
-Budget cap: 90 Perenual API requests per run (same pattern as fetch_perenual).
+Budget cap: 90 Perenual API requests per run (same pattern as fetch_perenual),
+but only consumed for genuinely broken URLs.
 Tracks run via DataSourceRun (source="image_cache").
 Sends email report on completion or budget exhaustion.
 """
 import logging
-from datetime import datetime, timezone
 from io import BytesIO
 from pathlib import Path
 from typing import Optional
@@ -110,9 +111,8 @@ async def _get_plants_needing_cache(db: AsyncSession) -> list[tuple[int, int, st
 
 async def cache_images(ctx: dict, triggered_by: str = "cron") -> None:
     """
-    Cache plant images as WebP files. For each uncached plant, fetches a
-    fresh image URL from Perenual's species detail endpoint, downloads the
-    image, converts to WebP, and saves to disk.
+    Cache plant images as WebP files. Tries the existing image_url first;
+    only hits Perenual API to refresh the URL when the download fails.
     """
     async with AsyncSessionLocal() as db:
         if await is_source_running(db, "image_cache"):
@@ -146,39 +146,42 @@ async def cache_images(ctx: dict, triggered_by: str = "cron") -> None:
             already_cached = total_with_image - total_eligible
 
             for plant_id, perenual_id, current_url in plants:
-                # Budget check before API call
-                if requests_used >= _REQUEST_BUDGET:
-                    logger.info("cache_images: budget exhausted after %d requests", requests_used)
-                    break
-
                 try:
-                    # Fetch fresh image URL from Perenual
-                    detail = await fetch_species_detail(perenual_id)
-                    requests_used += 1
+                    # 1. Try downloading from the existing URL (no API call)
+                    image_bytes = await _download_image(current_url)
 
-                    fresh_url = _image_url_from_detail(detail)
-                    if not fresh_url:
-                        logger.warning("cache_images: no image URL in detail for plant %d", plant_id)
-                        failed += 1
-                        error_messages.append(f"Plant {plant_id}: no image URL in Perenual detail")
-                        continue
-
-                    # Update image_url if changed
-                    if fresh_url != current_url:
-                        plant = await db.get(Plant, plant_id)
-                        if plant:
-                            plant.image_url = fresh_url
-                            await db.commit()
-
-                    # Download
-                    image_bytes = await _download_image(fresh_url)
                     if not image_bytes:
-                        logger.warning("cache_images: download failed for plant %d", plant_id)
-                        failed += 1
-                        error_messages.append(f"Plant {plant_id}: download failed")
-                        continue
+                        # 2. Download failed — refresh URL via Perenual API
+                        if requests_used >= _REQUEST_BUDGET:
+                            logger.info("cache_images: budget exhausted after %d requests", requests_used)
+                            break
 
-                    # Convert to WebP
+                        detail = await fetch_species_detail(perenual_id)
+                        requests_used += 1
+
+                        fresh_url = _image_url_from_detail(detail)
+                        if not fresh_url:
+                            logger.warning("cache_images: no image URL in detail for plant %d", plant_id)
+                            failed += 1
+                            error_messages.append(f"Plant {plant_id}: no image URL in Perenual detail")
+                            continue
+
+                        # Update image_url if changed
+                        if fresh_url != current_url:
+                            plant = await db.get(Plant, plant_id)
+                            if plant:
+                                plant.image_url = fresh_url
+                                await db.commit()
+
+                        # Retry download with refreshed URL
+                        image_bytes = await _download_image(fresh_url)
+                        if not image_bytes:
+                            logger.warning("cache_images: download failed for plant %d (after refresh)", plant_id)
+                            failed += 1
+                            error_messages.append(f"Plant {plant_id}: download failed after URL refresh")
+                            continue
+
+                    # 3. Convert to WebP
                     webp_bytes = _convert_to_webp(image_bytes)
                     if not webp_bytes:
                         logger.warning("cache_images: WebP conversion failed for plant %d", plant_id)
@@ -186,7 +189,7 @@ async def cache_images(ctx: dict, triggered_by: str = "cron") -> None:
                         error_messages.append(f"Plant {plant_id}: WebP conversion failed")
                         continue
 
-                    # Save
+                    # 4. Save
                     cache_path = _CACHE_DIR / f"{plant_id}.webp"
                     cache_path.write_bytes(webp_bytes)
                     cached += 1
