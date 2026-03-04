@@ -3,15 +3,15 @@ ARQ task: cache plant images as WebP files on disk.
 
 Strategy
 --------
-Query all plants that have an image_url and are linked to a perenual_plants
-source row, but do not yet have a cached WebP file on disk. For each plant,
-attempt to download directly from the existing plants.image_url. If the
-download fails (non-200, timeout, DNS error), hit the Perenual species detail
-endpoint to refresh the URL and retry once. This means most plants with valid
-URLs are cached without touching the API quota.
+Query all plants that have an image_url but do not yet have a cached WebP file
+on disk (regardless of data source). For each plant, attempt to download
+directly from the existing plants.image_url. If the download fails and the
+plant has a linked perenual_plants source row, hit the Perenual species detail
+endpoint to refresh the URL and retry once. Non-Perenual plants with broken
+URLs are logged and skipped (no API refresh possible).
 
 Budget cap: 90 Perenual API requests per run (same pattern as fetch_perenual),
-but only consumed for genuinely broken URLs.
+but only consumed for genuinely broken URLs on Perenual-sourced plants.
 Tracks run via DataSourceRun (source="image_cache").
 Sends email report on completion or budget exhaustion.
 """
@@ -22,7 +22,7 @@ from typing import Optional
 
 import httpx
 from PIL import Image
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.db.session import AsyncSessionLocal
@@ -85,16 +85,19 @@ def _convert_to_webp(image_bytes: bytes) -> Optional[bytes]:
         return None
 
 
-async def _get_plants_needing_cache(db: AsyncSession) -> list[tuple[int, int, str]]:
+async def _get_plants_needing_cache(
+    db: AsyncSession,
+) -> list[tuple[int, Optional[int], str]]:
     """
     Return list of (plant_id, perenual_id, image_url) for plants that:
     - Have an image_url
-    - Are linked to a perenual_plants source row
     - Do not yet have a cached .webp file on disk
+
+    perenual_id comes from a LEFT JOIN — will be None for non-Perenual plants.
     """
     result = await db.execute(
         select(Plant.id, PerenualPlant.perenual_id, Plant.image_url)
-        .join(PerenualPlant, PerenualPlant.plant_id == Plant.id)
+        .outerjoin(PerenualPlant, PerenualPlant.plant_id == Plant.id)
         .where(Plant.image_url.isnot(None))
     )
     rows = result.all()
@@ -137,12 +140,11 @@ async def cache_images(ctx: dict, triggered_by: str = "cron") -> None:
             error_messages: list[str] = []
 
             # Count already-cached for the report
-            all_result = await db.execute(
-                select(Plant.id)
-                .join(PerenualPlant, PerenualPlant.plant_id == Plant.id)
+            total_result = await db.execute(
+                select(func.count(Plant.id))
                 .where(Plant.image_url.isnot(None))
             )
-            total_with_image = len(all_result.all())
+            total_with_image = total_result.scalar_one()
             already_cached = total_with_image - total_eligible
 
             for plant_id, perenual_id, current_url in plants:
@@ -151,6 +153,13 @@ async def cache_images(ctx: dict, triggered_by: str = "cron") -> None:
                     image_bytes = await _download_image(current_url)
 
                     if not image_bytes:
+                        if perenual_id is None:
+                            # Non-Perenual plant — no API to refresh URL from
+                            logger.warning("cache_images: download failed for plant %d (no Perenual source)", plant_id)
+                            failed += 1
+                            error_messages.append(f"Plant {plant_id}: download failed, no Perenual source to refresh")
+                            continue
+
                         # 2. Download failed — refresh URL via Perenual API
                         if requests_used >= _REQUEST_BUDGET:
                             logger.info("cache_images: budget exhausted after %d requests", requests_used)
