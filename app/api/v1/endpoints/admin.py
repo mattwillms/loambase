@@ -888,17 +888,19 @@ async def get_fetch_history(
     admin_user: AdminUser,
     db: AsyncSession = Depends(get_db),
     source: Optional[str] = Query(None),
+    exclude_sources: Optional[str] = Query(None, description="Comma-separated sources to exclude"),
     page: int = Query(1, ge=1),
     per_page: int = Query(20, ge=1, le=100),
 ) -> dict:
     """Paginated run history for data source fetchers."""
+    excluded = {s.strip() for s in exclude_sources.split(",")} if exclude_sources else set()
     rows: list[dict] = []
 
     # Gather DataSourceRun entries (permapeople + enrichment + image_cache)
     dsr_sources = []
     if source is None:
-        dsr_sources = ["permapeople", "enrichment", "image_cache"]
-    elif source in ("permapeople", "enrichment", "image_cache"):
+        dsr_sources = [s for s in ["permapeople", "enrichment", "image_cache"] if s not in excluded]
+    elif source in ("permapeople", "enrichment", "image_cache") and source not in excluded:
         dsr_sources = [source]
 
     if dsr_sources:
@@ -925,7 +927,7 @@ async def get_fetch_history(
             })
 
     # Gather SeederRun entries (perenual)
-    if source is None or source == "perenual":
+    if (source is None or source == "perenual") and "perenual" not in excluded:
         sr_result = await db.execute(
             select(SeederRun).order_by(SeederRun.started_at.desc())
         )
