@@ -1247,14 +1247,9 @@ async def update_cron_job(
 @router.post("/worker/restart")
 async def restart_worker(admin_user: AdminUser) -> dict:
     """Restart the loambase-worker container to apply schedule changes."""
-    import subprocess
+    import docker
 
-    try:
-        subprocess.run(
-            ["docker", "restart", "loambase-loambase-worker-1"],
-            timeout=10,
-            check=False,
-        )
-    except subprocess.TimeoutExpired:
-        pass  # restart issued, container may take time
+    client = docker.from_env()
+    container = client.containers.get("loambase-loambase-worker-1")
+    container.restart()
     return {"status": "restarting"}
