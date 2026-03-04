@@ -54,7 +54,10 @@ _RETRY_HOURS_UTC = [6, 9, 12]  # quota-not-reset retry schedule (UTC)
 def _image_url(species: dict) -> Optional[str]:
     img = species.get("default_image")
     if isinstance(img, dict):
-        return img.get("original_url") or img.get("regular_url")
+        url = img.get("original_url") or img.get("regular_url")
+        if url and "sk3776-image-kwvuoab1" in url:
+            return None
+        return url
     return None
 
 
