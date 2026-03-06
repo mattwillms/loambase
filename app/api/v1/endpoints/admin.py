@@ -858,6 +858,16 @@ async def get_fetch_status(
         select(func.count()).select_from(Plant).where(Plant.image_url.isnot(None))
     ) or 0
 
+    import os
+    _IMAGE_CACHE_DIR = "/app/image_cache/plants"
+    try:
+        cached_on_disk = sum(
+            1 for f in os.scandir(_IMAGE_CACHE_DIR)
+            if f.is_file() and f.name.endswith(".webp")
+        )
+    except FileNotFoundError:
+        cached_on_disk = 0
+
     return {
         "permapeople": {
             "latest_run": pp_latest,
@@ -879,6 +889,7 @@ async def get_fetch_status(
             "latest_run": ic_latest,
             "is_running": ic_running,
             "plants_with_image": plants_with_image,
+            "cached_on_disk": cached_on_disk,
         },
         "plants_total": plants_total or 0,
     }
