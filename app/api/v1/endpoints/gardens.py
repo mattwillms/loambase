@@ -101,7 +101,10 @@ async def create_bed(
     garden_id: int, data: BedCreate, current_user: CurrentUser, db: AsyncSession = Depends(get_db)
 ):
     await _get_owned_garden(db, garden_id, current_user.id)
-    bed = Bed(**data.model_dump(), garden_id=garden_id)
+    values = data.model_dump()
+    if not values.get("boundary") and values.get("width_ft") and values.get("length_ft"):
+        values["boundary"] = rect_boundary(values["width_ft"], values["length_ft"])
+    bed = Bed(**values, garden_id=garden_id)
     db.add(bed)
     await db.commit()
     await db.refresh(bed)
@@ -121,14 +124,34 @@ async def update_bed(
     bed_id: int, data: BedUpdate, current_user: CurrentUser, db: AsyncSession = Depends(get_db)
 ):
     bed = await _get_owned_bed(db, bed_id, current_user.id)
-    for field, value in data.model_dump(exclude_unset=True).items():
+    updates = data.model_dump(exclude_unset=True)
+    for field, value in updates.items():
         setattr(bed, field, value)
+    # Auto-generate boundary when dimensions change and no explicit boundary was sent
+    if ("width_ft" in updates or "length_ft" in updates) and "boundary" not in updates:
+        w = bed.width_ft
+        h = bed.length_ft
+        if w and h:
+            bed.boundary = rect_boundary(w, h)
     await db.commit()
     await db.refresh(bed)
     return bed
 
 
 # ── Helpers ───────────────────────────────────────────────────────────────────
+
+
+def rect_boundary(w: float, h: float) -> dict:
+    """Generate a rectangular boundary polygon from width and height in feet."""
+    return {
+        "type": "polygon",
+        "vertices": [
+            {"x": 0, "y": 0},
+            {"x": w, "y": 0},
+            {"x": w, "y": h},
+            {"x": 0, "y": h},
+        ],
+    }
 
 
 async def _get_owned_garden(db: AsyncSession, garden_id: int, user_id: int) -> Garden:

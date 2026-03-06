@@ -1,5 +1,5 @@
 from datetime import datetime
-from typing import Optional
+from typing import Any, Optional
 from pydantic import BaseModel
 
 
@@ -12,6 +12,8 @@ class GardenCreate(BaseModel):
     irrigation_type: Optional[str] = None
     latitude: Optional[float] = None
     longitude: Optional[float] = None
+    canvas_width_ft: Optional[float] = None
+    canvas_height_ft: Optional[float] = None
 
 
 class GardenUpdate(GardenCreate):
@@ -29,6 +31,8 @@ class GardenRead(BaseModel):
     irrigation_type: Optional[str]
     latitude: Optional[float]
     longitude: Optional[float]
+    canvas_width_ft: Optional[float]
+    canvas_height_ft: Optional[float]
     created_at: datetime
     updated_at: datetime
 
@@ -42,6 +46,7 @@ class BedCreate(BaseModel):
     sun_exposure_override: Optional[str] = None
     soil_amendments: Optional[str] = None
     notes: Optional[str] = None
+    boundary: Optional[dict[str, Any]] = None
 
 
 class BedUpdate(BedCreate):
@@ -57,6 +62,7 @@ class BedRead(BaseModel):
     sun_exposure_override: Optional[str]
     soil_amendments: Optional[str]
     notes: Optional[str]
+    boundary: Optional[dict[str, Any]]
     created_at: datetime
     updated_at: datetime
 

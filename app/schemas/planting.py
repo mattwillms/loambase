@@ -37,6 +37,8 @@ class PlantingCreate(BaseModel):
     photos: Optional[list[str]] = None
     grid_x: Optional[int] = None
     grid_y: Optional[int] = None
+    pos_x: Optional[float] = None
+    pos_y: Optional[float] = None
     is_locked: bool = False
 
 
@@ -49,6 +51,8 @@ class PlantingUpdate(BaseModel):
     photos: Optional[list[str]] = None
     grid_x: Optional[int] = None
     grid_y: Optional[int] = None
+    pos_x: Optional[float] = None
+    pos_y: Optional[float] = None
     is_locked: Optional[bool] = None
 
 
@@ -64,6 +68,8 @@ class PlantingRead(BaseModel):
     photos: Optional[list[str]] = None
     grid_x: Optional[int] = None
     grid_y: Optional[int] = None
+    pos_x: Optional[float] = None
+    pos_y: Optional[float] = None
     is_locked: bool = False
     created_at: datetime
     updated_at: datetime
