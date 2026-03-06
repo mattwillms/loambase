@@ -68,6 +68,7 @@ async def list_plants(
     sunlight: str | None = Query(None, description="Filter by sun_requirement (full_sun, partial_shade, full_shade)"),
     hardiness_zone: str | None = Query(None, description="Filter by hardiness zone (e.g. '8a')"),
     favorites_only: bool = Query(False, description="Only show plants the user has favorited"),
+    edible: bool | None = Query(None, description="Filter to edible plants only"),
     page: int = Query(1, ge=1),
     per_page: int = Query(20, ge=1, le=100),
 ):
@@ -83,6 +84,8 @@ async def list_plants(
         query = query.where(Plant.sun_requirement == sunlight)
     if hardiness_zone:
         query = query.where(Plant.hardiness_zones.contains([hardiness_zone]))
+    if edible is not None:
+        query = query.where(Plant.edible == edible)
     if favorites_only:
         fav_subq = (
             select(UserPlantFavorite.plant_id)
