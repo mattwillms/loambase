@@ -44,6 +44,7 @@ class PlantingCreate(BaseModel):
 
 
 class PlantingUpdate(BaseModel):
+    bed_id: Optional[int] = None
     status: Optional[PlantingStatus] = None
     date_planted: Optional[date] = None
     date_transplanted: Optional[date] = None

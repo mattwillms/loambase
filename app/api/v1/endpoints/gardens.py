@@ -132,10 +132,23 @@ async def update_bed(
 ):
     bed = await _get_owned_bed(db, bed_id, current_user.id)
     updates = data.model_dump(exclude_unset=True)
+
+    dim_fields = {"width_ft", "length_ft"}
+    spatial_fields = dim_fields | {"boundary"}
+
+    # Locked beds: block all spatial changes
+    if bed.is_locked and spatial_fields & updates.keys():
+        raise HTTPException(status_code=400, detail="Unlock the bed before resizing")
+
+    # Drawn beds (boundary without dimensions): block dimension changes
+    is_drawn = bed.boundary is not None and bed.width_ft is None and bed.length_ft is None
+    if is_drawn and dim_fields & updates.keys():
+        raise HTTPException(status_code=400, detail="Cannot set dimensions on a drawn bed")
+
     for field, value in updates.items():
         setattr(bed, field, value)
     # Auto-generate boundary when dimensions change and no explicit boundary was sent
-    if ("width_ft" in updates or "length_ft" in updates) and "boundary" not in updates:
+    if not is_drawn and ("width_ft" in updates or "length_ft" in updates) and "boundary" not in updates:
         w = bed.width_ft
         h = bed.length_ft
         if w and h:

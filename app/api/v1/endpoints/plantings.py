@@ -50,7 +50,10 @@ async def update_planting(
     db: AsyncSession = Depends(get_db),
 ):
     planting = await _get_owned_planting(db, planting_id, current_user.id)
-    for field, value in data.model_dump(exclude_unset=True).items():
+    updates = data.model_dump(exclude_unset=True)
+    if "bed_id" in updates:
+        await _get_owned_bed(db, updates["bed_id"], current_user.id)
+    for field, value in updates.items():
         setattr(planting, field, value)
     await db.commit()
     return await _load_planting(db, planting.id)
