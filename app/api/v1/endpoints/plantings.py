@@ -1,7 +1,7 @@
 from datetime import date
 
 from fastapi import APIRouter, Depends, HTTPException, status
-from sqlalchemy import select
+from sqlalchemy import or_, and_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
@@ -21,7 +21,16 @@ router = APIRouter(tags=["plantings"])
 async def create_planting(
     data: PlantingCreate, current_user: CurrentUser, db: AsyncSession = Depends(get_db)
 ):
-    await _get_owned_bed(db, data.bed_id, current_user.id)
+    if data.bed_id:
+        await _get_owned_bed(db, data.bed_id, current_user.id)
+    elif data.garden_id:
+        result = await db.execute(
+            select(Garden).where(Garden.id == data.garden_id, Garden.user_id == current_user.id)
+        )
+        if not result.scalar_one_or_none():
+            raise HTTPException(status_code=404, detail="Garden not found")
+    else:
+        raise HTTPException(status_code=400, detail="Either bed_id or garden_id is required")
     planting = Planting(**data.model_dump())
     if planting.date_planted is None:
         planting.date_planted = date.today()
@@ -51,8 +60,15 @@ async def update_planting(
 ):
     planting = await _get_owned_planting(db, planting_id, current_user.id)
     updates = data.model_dump(exclude_unset=True)
-    if "bed_id" in updates:
+    if "bed_id" in updates and updates["bed_id"] is not None:
         await _get_owned_bed(db, updates["bed_id"], current_user.id)
+        planting.garden_id = None
+    elif "bed_id" in updates and updates["bed_id"] is None:
+        # Moving to open canvas — derive garden_id from current bed
+        if planting.bed_id:
+            current_bed = await db.get(Bed, planting.bed_id)
+            if current_bed:
+                planting.garden_id = current_bed.garden_id
     for field, value in updates.items():
         setattr(planting, field, value)
     await db.commit()
@@ -115,10 +131,11 @@ async def _get_owned_bed(db: AsyncSession, bed_id: int, user_id: int) -> Bed:
 async def _get_owned_planting(
     db: AsyncSession, planting_id: int, user_id: int
 ) -> Planting:
+    # Planting may belong to a bed (bed → garden → user) or directly to a garden
     result = await db.execute(
         select(Planting)
-        .join(Bed, Planting.bed_id == Bed.id)
-        .join(Garden, Bed.garden_id == Garden.id)
+        .outerjoin(Bed, Planting.bed_id == Bed.id)
+        .outerjoin(Garden, or_(Bed.garden_id == Garden.id, Planting.garden_id == Garden.id))
         .where(Planting.id == planting_id, Garden.user_id == user_id)
         .options(selectinload(Planting.plant), selectinload(Planting.bed))
     )

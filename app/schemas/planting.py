@@ -27,7 +27,8 @@ class BedRef(BaseModel):
 
 
 class PlantingCreate(BaseModel):
-    bed_id: int
+    bed_id: Optional[int] = None
+    garden_id: Optional[int] = None
     plant_id: int
     status: PlantingStatus = PlantingStatus.planned
     date_planted: Optional[date] = None
@@ -61,7 +62,8 @@ class PlantingUpdate(BaseModel):
 
 class PlantingRead(BaseModel):
     id: int
-    bed_id: int
+    bed_id: Optional[int] = None
+    garden_id: Optional[int] = None
     plant_id: int
     status: str
     date_planted: Optional[date] = None

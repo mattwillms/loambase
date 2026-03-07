@@ -14,7 +14,8 @@ class Planting(Base):
     __tablename__ = "plantings"
 
     id: Mapped[int] = mapped_column(primary_key=True)
-    bed_id: Mapped[int] = mapped_column(ForeignKey("beds.id", ondelete="CASCADE"), index=True)
+    bed_id: Mapped[Optional[int]] = mapped_column(ForeignKey("beds.id", ondelete="CASCADE"), index=True, nullable=True)
+    garden_id: Mapped[Optional[int]] = mapped_column(ForeignKey("gardens.id", ondelete="CASCADE"), index=True, nullable=True)
     plant_id: Mapped[int] = mapped_column(ForeignKey("plants.id"), index=True)
 
     date_planted: Mapped[Optional[date]] = mapped_column(Date)
@@ -58,7 +59,8 @@ class Planting(Base):
     )
 
     # Relationships
-    bed: Mapped["Bed"] = relationship(back_populates="plantings")
+    bed: Mapped[Optional["Bed"]] = relationship(back_populates="plantings")
+    garden: Mapped[Optional["Garden"]] = relationship(back_populates="plantings")
     plant: Mapped["Plant"] = relationship(back_populates="plantings")
     schedules: Mapped[list["Schedule"]] = relationship(back_populates="planting", cascade="all, delete-orphan")
     treatment_logs: Mapped[list["TreatmentLog"]] = relationship(back_populates="planting", cascade="all, delete-orphan")

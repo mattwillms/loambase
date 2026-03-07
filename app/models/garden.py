@@ -37,6 +37,7 @@ class Garden(Base):
     # Relationships
     user: Mapped["User"] = relationship(back_populates="gardens")
     beds: Mapped[list["Bed"]] = relationship(back_populates="garden", cascade="all, delete-orphan")
+    plantings: Mapped[list["Planting"]] = relationship(back_populates="garden", cascade="all, delete-orphan")
     watering_groups: Mapped[list["WateringGroup"]] = relationship(back_populates="garden", cascade="all, delete-orphan")
     journal_entries: Mapped[list["JournalEntry"]] = relationship(back_populates="garden")
 

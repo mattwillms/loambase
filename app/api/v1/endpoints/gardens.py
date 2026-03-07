@@ -1,5 +1,5 @@
 from fastapi import APIRouter, Depends, HTTPException, status
-from sqlalchemy import select
+from sqlalchemy import and_, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
@@ -74,8 +74,13 @@ async def list_garden_plantings(
     await _get_owned_garden(db, garden_id, current_user.id)
     result = await db.execute(
         select(Planting)
-        .join(Bed, Planting.bed_id == Bed.id)
-        .where(Bed.garden_id == garden_id)
+        .outerjoin(Bed, Planting.bed_id == Bed.id)
+        .where(
+            or_(
+                and_(Planting.bed_id.isnot(None), Bed.garden_id == garden_id),
+                and_(Planting.garden_id == garden_id, Planting.bed_id.is_(None)),
+            )
+        )
         .options(
             selectinload(Planting.plant),
             selectinload(Planting.bed),
@@ -85,8 +90,9 @@ async def list_garden_plantings(
     return [
         {
             "id": p.id,
+            "garden_id": p.garden_id,
             "bed_id": p.bed_id,
-            "bed_name": p.bed.name,
+            "bed_name": p.bed.name if p.bed else None,
             "plant_id": p.plant_id,
             "common_name": p.plant.common_name if p.plant else None,
             "status": p.status,
