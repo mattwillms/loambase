@@ -95,6 +95,7 @@ async def list_garden_plantings(
             "pos_y": p.pos_y,
             "plant_type": p.plant.plant_type if p.plant else None,
             "spacing_inches": p.plant.spacing_inches if p.plant else None,
+            "is_locked": p.is_locked,
         }
         for p in plantings
     ]
@@ -145,13 +146,13 @@ async def update_bed(
 # ── Helpers ───────────────────────────────────────────────────────────────────
 
 
-def rect_boundary(w: float, h: float) -> list:
-    """Generate a rectangular boundary polygon from width and height in feet."""
+def rect_boundary(w: float, h: float, ox: float = 0, oy: float = 0) -> list:
+    """Generate a rectangular boundary polygon from width and height in feet, offset by (ox, oy)."""
     return [
-        {"x": 0, "y": 0},
-        {"x": w, "y": 0},
-        {"x": w, "y": h},
-        {"x": 0, "y": h},
+        {"x": ox, "y": oy},
+        {"x": ox + w, "y": oy},
+        {"x": ox + w, "y": oy + h},
+        {"x": ox, "y": oy + h},
     ]
 
 

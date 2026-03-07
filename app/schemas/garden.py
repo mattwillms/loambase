@@ -47,6 +47,7 @@ class BedCreate(BaseModel):
     soil_amendments: Optional[str] = None
     notes: Optional[str] = None
     boundary: Optional[list[dict[str, Any]]] = None
+    is_locked: Optional[bool] = None
 
 
 class BedUpdate(BedCreate):
@@ -63,6 +64,7 @@ class BedRead(BaseModel):
     soil_amendments: Optional[str]
     notes: Optional[str]
     boundary: Optional[list[dict[str, Any]]]
+    is_locked: bool
     created_at: datetime
     updated_at: datetime
 
