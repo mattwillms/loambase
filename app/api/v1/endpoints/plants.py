@@ -118,7 +118,7 @@ async def get_plant_image_endpoint(plant_id: int, db: AsyncSession = Depends(get
         raise HTTPException(status_code=404, detail="No image for this plant")
     result = await get_plant_image(plant_id, plant.image_url)
     if result is None:
-        raise HTTPException(status_code=404, detail="Image not cached")
+        raise HTTPException(status_code=404, detail="Image unavailable")
     content, content_type = result
     return Response(content=content, media_type=content_type)
 

@@ -1,7 +1,7 @@
 from datetime import datetime
 from typing import Optional
 
-from pydantic import BaseModel
+from pydantic import BaseModel, model_validator
 
 
 class PlantSummary(BaseModel):
@@ -22,6 +22,12 @@ class PlantSummary(BaseModel):
     is_favorite: bool = False
 
     model_config = {"from_attributes": True}
+
+    @model_validator(mode='after')
+    def use_proxy_url(self):
+        if self.image_url is not None:
+            self.image_url = f"/api/v1/plants/{self.id}/image"
+        return self
 
 
 class PlantRead(BaseModel):
@@ -106,6 +112,12 @@ class PlantRead(BaseModel):
     is_favorite: bool = False
 
     model_config = {"from_attributes": True}
+
+    @model_validator(mode='after')
+    def use_proxy_url(self):
+        if self.image_url is not None:
+            self.image_url = f"/api/v1/plants/{self.id}/image"
+        return self
 
 
 class PlantListResponse(BaseModel):
