@@ -40,6 +40,7 @@ class PlantingCreate(BaseModel):
     pos_x: Optional[float] = None
     pos_y: Optional[float] = None
     is_locked: bool = False
+    color: Optional[str] = None
 
 
 class PlantingUpdate(BaseModel):
@@ -54,6 +55,7 @@ class PlantingUpdate(BaseModel):
     pos_x: Optional[float] = None
     pos_y: Optional[float] = None
     is_locked: Optional[bool] = None
+    color: Optional[str] = None
 
 
 class PlantingRead(BaseModel):
@@ -71,6 +73,7 @@ class PlantingRead(BaseModel):
     pos_x: Optional[float] = None
     pos_y: Optional[float] = None
     is_locked: bool = False
+    color: Optional[str] = None
     created_at: datetime
     updated_at: datetime
     plant: Optional[PlantSummary] = None

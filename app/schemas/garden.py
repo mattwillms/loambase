@@ -48,6 +48,7 @@ class BedCreate(BaseModel):
     notes: Optional[str] = None
     boundary: Optional[list[dict[str, Any]]] = None
     is_locked: Optional[bool] = None
+    color: Optional[str] = None
 
 
 class BedUpdate(BedCreate):
@@ -65,6 +66,7 @@ class BedRead(BaseModel):
     notes: Optional[str]
     boundary: Optional[list[dict[str, Any]]]
     is_locked: bool
+    color: Optional[str]
     created_at: datetime
     updated_at: datetime
 

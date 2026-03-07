@@ -35,6 +35,7 @@ class Planting(Base):
     pos_x: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
     pos_y: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
     is_locked: Mapped[bool] = mapped_column(Boolean, default=False, server_default="false")
+    color: Mapped[Optional[str]] = mapped_column(String(7), nullable=True)
 
     notes: Mapped[Optional[str]] = mapped_column(Text)
     photos: Mapped[Optional[list[str]]] = mapped_column(ARRAY(String))

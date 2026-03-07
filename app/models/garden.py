@@ -57,6 +57,7 @@ class Bed(Base):
     notes: Mapped[Optional[str]] = mapped_column(Text)
     boundary: Mapped[Optional[dict]] = mapped_column(JSON, nullable=True)
     is_locked: Mapped[bool] = mapped_column(Boolean, default=False, server_default="false")
+    color: Mapped[Optional[str]] = mapped_column(String(7), nullable=True)
 
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), default=lambda: datetime.now(timezone.utc)

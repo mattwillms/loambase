@@ -96,6 +96,7 @@ async def list_garden_plantings(
             "plant_type": p.plant.plant_type if p.plant else None,
             "spacing_inches": p.plant.spacing_inches if p.plant else None,
             "is_locked": p.is_locked,
+            "color": p.color,
         }
         for p in plantings
     ]
