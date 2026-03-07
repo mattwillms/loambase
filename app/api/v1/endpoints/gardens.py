@@ -97,7 +97,7 @@ async def list_garden_plantings(
             "spacing_inches": p.plant.spacing_inches if p.plant else None,
             "is_locked": p.is_locked,
             "color": p.color,
-            "image_url": p.plant.image_url if p.plant else None,
+            "image_url": f"/api/v1/plants/{p.plant_id}/image" if p.plant and p.plant.image_url else None,
         }
         for p in plantings
     ]
