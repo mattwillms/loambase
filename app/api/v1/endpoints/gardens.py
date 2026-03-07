@@ -91,6 +91,10 @@ async def list_garden_plantings(
             "common_name": p.plant.common_name if p.plant else None,
             "status": p.status,
             "date_planted": p.date_planted.isoformat() if p.date_planted else None,
+            "pos_x": p.pos_x,
+            "pos_y": p.pos_y,
+            "plant_type": p.plant.plant_type if p.plant else None,
+            "spacing_inches": p.plant.spacing_inches if p.plant else None,
         }
         for p in plantings
     ]
@@ -141,17 +145,14 @@ async def update_bed(
 # ── Helpers ───────────────────────────────────────────────────────────────────
 
 
-def rect_boundary(w: float, h: float) -> dict:
+def rect_boundary(w: float, h: float) -> list:
     """Generate a rectangular boundary polygon from width and height in feet."""
-    return {
-        "type": "polygon",
-        "vertices": [
-            {"x": 0, "y": 0},
-            {"x": w, "y": 0},
-            {"x": w, "y": h},
-            {"x": 0, "y": h},
-        ],
-    }
+    return [
+        {"x": 0, "y": 0},
+        {"x": w, "y": 0},
+        {"x": w, "y": h},
+        {"x": 0, "y": h},
+    ]
 
 
 async def _get_owned_garden(db: AsyncSession, garden_id: int, user_id: int) -> Garden:

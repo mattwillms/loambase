@@ -46,7 +46,7 @@ class BedCreate(BaseModel):
     sun_exposure_override: Optional[str] = None
     soil_amendments: Optional[str] = None
     notes: Optional[str] = None
-    boundary: Optional[dict[str, Any]] = None
+    boundary: Optional[list[dict[str, Any]]] = None
 
 
 class BedUpdate(BedCreate):
@@ -62,7 +62,7 @@ class BedRead(BaseModel):
     sun_exposure_override: Optional[str]
     soil_amendments: Optional[str]
     notes: Optional[str]
-    boundary: Optional[dict[str, Any]]
+    boundary: Optional[list[dict[str, Any]]]
     created_at: datetime
     updated_at: datetime
 
