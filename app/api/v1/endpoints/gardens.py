@@ -126,6 +126,15 @@ async def get_bed(bed_id: int, current_user: CurrentUser, db: AsyncSession = Dep
     return await _get_owned_bed(db, bed_id, current_user.id)
 
 
+@beds_router.delete("/{bed_id}", status_code=status.HTTP_204_NO_CONTENT)
+async def delete_bed(
+    bed_id: int, current_user: CurrentUser, db: AsyncSession = Depends(get_db)
+):
+    bed = await _get_owned_bed(db, bed_id, current_user.id)
+    await db.delete(bed)
+    await db.commit()
+
+
 @beds_router.patch("/{bed_id}", response_model=BedRead)
 async def update_bed(
     bed_id: int, data: BedUpdate, current_user: CurrentUser, db: AsyncSession = Depends(get_db)
