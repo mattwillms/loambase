@@ -28,6 +28,8 @@ from app.schemas.admin_plant import (
     EnrichmentRuleUpdate,
     EnrichmentRulesResponse,
     FieldCoverageItem,
+    ImageCacheFailedPlant,
+    ImageCacheFailedResponse,
     PerenualSourceData,
     PermapeopleSourceData,
     PlantCoverageResponse,
@@ -713,6 +715,31 @@ async def trigger_image_cache(
         details={"pipeline": "image_cache", "triggered_by": "mimus"},
     )
     return {"status": "queued", "message": "Image cache started"}
+
+
+@router.get("/image-cache/failed", response_model=ImageCacheFailedResponse)
+async def get_image_cache_failed(
+    admin_user: AdminUser,
+    db: AsyncSession = Depends(get_db),
+    page: int = Query(1, ge=1),
+    per_page: int = Query(50, ge=1, le=200),
+):
+    """Paginated list of plants with image_cache_failed = true."""
+    total = await db.scalar(
+        select(func.count()).select_from(Plant).where(Plant.image_cache_failed.is_(True))
+    ) or 0
+    result = await db.execute(
+        select(Plant)
+        .where(Plant.image_cache_failed.is_(True))
+        .order_by(Plant.id)
+        .limit(per_page)
+        .offset((page - 1) * per_page)
+    )
+    plants = result.scalars().all()
+    return ImageCacheFailedResponse(
+        items=[ImageCacheFailedPlant.model_validate(p) for p in plants],
+        total=total,
+    )
 
 
 @router.post("/enrich")

@@ -118,6 +118,7 @@ async def _get_direct_plants(db: AsyncSession) -> list[tuple[int, str]]:
         select(Plant.id, Plant.image_url)
         .where(Plant.image_url.isnot(None))
         .where(~Plant.image_url.ilike("%wasabi%"))
+        .where(Plant.image_cache_failed.is_(False))
     )
     rows = result.all()
     return [
@@ -139,7 +140,16 @@ async def _run_pass1(
         try:
             image_bytes = await _download_image(image_url)
             if not image_bytes:
-                error_messages.append(f"Plant {plant_id}: direct download failed")
+                await db.execute(
+                    update(Plant)
+                    .where(Plant.id == plant_id)
+                    .values(
+                        image_cache_failed=True,
+                        image_cache_failed_reason=f"Direct download failed: HTTP error or timeout on {image_url}",
+                    )
+                )
+                await db.commit()
+                error_messages.append(f"Plant {plant_id}: direct download failed (flagged)")
                 continue
 
             webp_bytes = _convert_to_webp(image_bytes)

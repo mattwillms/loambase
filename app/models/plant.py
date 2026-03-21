@@ -95,6 +95,13 @@ class Plant(Base):
     pfaf_url: Mapped[Optional[str]] = mapped_column(Text)
     powo_url: Mapped[Optional[str]] = mapped_column(Text)
 
+    # Image cache failure tracking
+    # - Set to True by cache_images when a direct download fails after all retry attempts
+    # - Cleared automatically by enrich_plants whenever a new non-null image_url is written
+    # - Reason field preserved for debugging even after flag is cleared (overwritten on next failure)
+    image_cache_failed: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False, server_default="false")
+    image_cache_failed_reason: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+
     # Source tracking
     source: Mapped[str] = mapped_column(
         Enum("perenual", "trefle", "usda", "user", "permapeople", name="plant_source_enum"), default="user"

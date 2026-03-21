@@ -787,6 +787,13 @@ async def enrich_plants(ctx: dict, triggered_by: str = "manual") -> None:
                                 changed = True
                                 stats["fields_filled"] += 1
 
+                                # Clearing image_cache_failed allows cache_images to retry
+                                # this plant on next run. Any future data source that enriches
+                                # image_url will trigger a fresh cache attempt automatically.
+                                if field_name == "image_url" and resolved:
+                                    plant.image_cache_failed = False
+                                    # Do not clear image_cache_failed_reason — preserve for debugging
+
                                 for src in normalized:
                                     sources_used.add(src)
 

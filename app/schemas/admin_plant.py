@@ -16,6 +16,8 @@ class AdminPlantSummary(BaseModel):
     has_permapeople: bool
     field_count: int
     image_url: Optional[str] = None
+    image_cache_failed: bool = False
+    image_cache_failed_reason: Optional[str] = None
 
     model_config = {"from_attributes": True}
 
@@ -143,6 +145,21 @@ class EnrichmentRulesResponse(BaseModel):
 
 
 VALID_STRATEGIES = {"priority", "union", "longest", "average"}
+
+
+class ImageCacheFailedPlant(BaseModel):
+    id: int
+    common_name: str
+    scientific_name: Optional[str] = None
+    image_url: Optional[str] = None
+    image_cache_failed_reason: Optional[str] = None
+
+    model_config = {"from_attributes": True}
+
+
+class ImageCacheFailedResponse(BaseModel):
+    items: list[ImageCacheFailedPlant]
+    total: int
 
 
 class EnrichmentRuleUpdate(BaseModel):
